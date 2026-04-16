@@ -1,0 +1,13 @@
+.databricks
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+.runtime/
+output/
+
+runtime/web/node_modules/
+runtime/web/dist/
+runtime/web/tsconfig.tsbuildinfo
+runtime/web/tsconfig.node.tsbuildinfo

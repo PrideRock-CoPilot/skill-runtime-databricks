@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "company-skill-runtime": {
+      "url": "https://orchestrator-7474657980342662.aws.databricksapps.com/mcp"
+    }
+  }
+}

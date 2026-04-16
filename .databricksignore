@@ -1,0 +1,54 @@
+# Local environment
+.venv/
+.venv/**
+
+# Python cache
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+
+# Node modules (installed on Databricks)
+runtime/web/node_modules/
+runtime/web/node_modules/**
+
+# Frontend build output (built on Databricks at startup)
+runtime/web/dist/
+runtime/web/dist/**
+
+# TypeScript build info
+runtime/web/tsconfig.tsbuildinfo
+runtime/web/tsconfig.node.tsbuildinfo
+
+# Local runtime data and bootstrap output
+.runtime/
+.runtime/**
+
+# Local tooling and IDE
+.vscode/
+.github/
+.playwright-mcp/
+.databricks/
+
+# Local git metadata
+.git/
+
+# Output artifacts
+output/
+output/**
+
+# Development tools
+tools/
+
+# Non-runtime docs and legacy planning files
+documentation-guide.md
+skill-library-roadmap.md
+skill-packet-standard.md
+skill-routing-guide.md
+skill-runtime.agent.md
+skill-runtime.instructions.md
+skillbuilder.md
+AGENTS.md
+CLAUDE.md
+
+
