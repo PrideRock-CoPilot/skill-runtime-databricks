@@ -84,6 +84,19 @@ def _public_hosts() -> tuple[list[str], list[str]]:
 
 
 def _transport_security() -> TransportSecuritySettings:
+    strict_transport = os.getenv("SKILL_RUNTIME_MCP_STRICT_TRANSPORT", "false").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if not strict_transport:
+        return TransportSecuritySettings(
+            enable_dns_rebinding_protection=False,
+            allowed_hosts=["*"],
+            allowed_origins=["*"],
+        )
+
     hosts, origins = _public_hosts()
     return TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
