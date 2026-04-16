@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -28,7 +29,10 @@ from .models import (
 from .repository import RuntimeRepository
 from .runtime_service import RuntimeService, get_runtime_service
 
-_mcp_server = create_mcp_server(streamable_http_path="/", stateless_http=True)
+_mcp_server = create_mcp_server(
+    streamable_http_path="/",
+    stateless_http=os.getenv("SKILL_RUNTIME_MCP_STATELESS", "false").lower() in {"1", "true", "yes", "on"},
+)
 
 
 class SinglePageApp(StaticFiles):
