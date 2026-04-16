@@ -55,7 +55,7 @@ async def lifespan(app: FastAPI):
         yield
 
 
-app = FastAPI(title="Skill Runtime API", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="Skill Runtime API", version="0.2.0", lifespan=lifespan, redirect_slashes=False)
 service = get_runtime_service()
 app.add_middleware(
     CORSMiddleware,
