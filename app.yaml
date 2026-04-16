@@ -3,7 +3,7 @@ command:
   - app.py
 env:
   - name: SKILL_RUNTIME_MCP_STATELESS
-    value: "false"
+    value: "true"
   - name: SKILL_RUNTIME_AUTO_COMPILE
     value: "true"
   - name: SKILL_RUNTIME_DATA_DIR
