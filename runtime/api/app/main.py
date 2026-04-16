@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from .databricks_auth import DatabricksAuthMiddleware
 from .mcp_server import create_mcp_server
 from .models import (
     ActivateSkillRequest,
@@ -64,6 +65,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(DatabricksAuthMiddleware)
 app.mount(
     "/mcp",
     _mcp_server.streamable_http_app(),

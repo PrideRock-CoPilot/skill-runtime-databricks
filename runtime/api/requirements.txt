@@ -5,3 +5,4 @@ python-multipart==0.0.20
 pandas==2.2.3
 pyarrow==19.0.1
 mcp[cli]==1.27.0
+databricks-sdk>=0.50.0

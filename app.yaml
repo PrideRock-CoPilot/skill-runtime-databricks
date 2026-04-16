@@ -1,6 +1,9 @@
 command:
   - python
   - app.py
+oauth_permissions:
+  - name: databricks_workspace_access
+    description: "Access Databricks workspace on behalf of the signed-in user"
 env:
   - name: SKILL_RUNTIME_MCP_STATELESS
     value: "true"
