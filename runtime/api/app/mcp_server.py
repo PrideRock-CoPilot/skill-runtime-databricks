@@ -126,51 +126,8 @@ def _skill_detail(skill_id: str, gate_level: int) -> dict[str, object]:
     return response.model_dump()
 
 
-def _register_tools(mcp: FastMCP) -> FastMCP:
-    @mcp.tool(name="runtime_health")
-    def runtime_health() -> dict[str, object]:
-        """Return runtime configuration and storage locations."""
-        return _service().health()
-
-    @mcp.tool(name="set_session_context")
-    def set_session_context(
-        session_id: str,
-        user_id: str = "",
-        client_type: str = "",
-        model: str = "",
-    ) -> dict[str, object]:
-        """Set identity context for a session.
-
-        Call once at the start of a conversation. Subsequent tool calls that
-        include the same session_id automatically inherit user_id, client_type,
-        and model — no need to repeat them on every call.
-
-        - session_id: your conversation/thread identifier (required)
-        - user_id: who you are
-        - client_type: your tool/client (e.g. "genie-code", "copilot", "cursor")
-        - model: the LLM model (e.g. "claude-opus-4", "gpt-4o")
-        """
-        existing = _session_contexts.get(session_id, {})
-        if user_id:
-            existing["user_id"] = user_id
-        if client_type:
-            existing["client_type"] = client_type
-        if model:
-            existing["model"] = model
-        _session_contexts[session_id] = existing
-        return {"status": "context-set", "session_id": session_id, **existing}
-
-    @mcp.tool(name="get_session_context")
-    def get_session_context(session_id: str) -> dict[str, object]:
-        """Return the identity context stored for a session."""
-        stored = _session_contexts.get(session_id, {})
-        return {"session_id": session_id, **stored}
-
-    @mcp.tool(name="search_skills")
-    def search_skills(query: str = "") -> list[dict[str, object]]:
-        """Search the centralized skill registry by name, description, or use case."""
-        return _service().repository.list_skills(query)
-
+def _register_tools(mcp: FastMCP) -> FastMCP:  # noqa: C901
+    # ── 1 ──────────────────────────────────────────────────────────────────
     @mcp.tool(name="route_skill_request")
     def route_skill_request(
         prompt: str,
@@ -180,23 +137,14 @@ def _register_tools(mcp: FastMCP) -> FastMCP:
         project_id: str = "",
         client_type: str = "genie-code",
     ) -> dict[str, object]:
-        """Route a request to the best matching skill. Returns action directives.
+        """Route a request to the best matching skill and return action directives.
 
-        The response includes:
-        - matches: ranked skill candidates with scores
-        - complexity: detected task complexity
-        - recommended_gate: gate level for the matched skill
-        - action: one of "activate", "auto-build", or "trivial-bypass"
-        - next_step: explicit instruction for what to do next — follow it as a directive
-        - build_skill_id: when action is "auto-build", the skill to activate for building
-
-        Complexity is optional. Canonical values are simple, standard, deep, and
-        expert. Common aliases such as low, medium, and high are also accepted.
-
-        Follow the `action` and `next_step` fields:
-        - "activate" → call load_skill_context then activate_skill for the recommended skill
-        - "auto-build" → activate the build_skill_id to create the missing skill, then activate it
-        - "trivial-bypass" → answer directly without activation
+        Also searches the registry — no separate search call needed.
+        action values: "activate" | "auto-build" | "trivial-bypass"
+        Follow `next_step` as a directive:
+        - activate → call load_skill_context then activate_skill
+        - auto-build → activate build_skill_id, call create_skill, then activate it
+        - trivial-bypass → answer directly
         """
         _sid = _default_session_id(session_id)
         return _service().repository.route_request(
@@ -208,11 +156,115 @@ def _register_tools(mcp: FastMCP) -> FastMCP:
             client_type=client_type,
         ).model_dump()
 
+    # ── 2 ──────────────────────────────────────────────────────────────────
     @mcp.tool(name="load_skill_context")
     def load_skill_context(skill_id: str, gate_level: int = 1) -> dict[str, object]:
         """Load the gated skill bundles for one worker packet."""
         return _skill_detail(skill_id, gate_level)
 
+    # ── 3 ──────────────────────────────────────────────────────────────────
+    @mcp.tool(name="activate_skill")
+    def activate_skill(
+        skill_id: str,
+        gate_level: int = 1,
+        prompt: str = "",
+        activation_reason: str = "",
+        session_id: str = "",
+        user_id: str = "",
+        project_id: str = "",
+        client_type: str = "genie-code",
+    ) -> dict[str, object]:
+        """Set the active worker contract for the current session.
+
+        After activation, answer within the worker's identity, scope, and rules.
+        Call record_skill_outcome(type="alignment") after substantial responses.
+        """
+        _sid = _default_session_id(session_id)
+        payload = ActivateSkillRequest(
+            session_id=_sid,
+            user_id=_default_user_id(user_id, _sid=_sid),
+            project_id=project_id,
+            client_type=client_type,  # type: ignore[arg-type]
+            gate_level=gate_level,
+            prompt=prompt,
+            activation_reason=activation_reason,
+        )
+        return _service().repository.activate_skill(skill_id, payload)
+
+    # ── 4 ──────────────────────────────────────────────────────────────────
+    @mcp.tool(name="manage_skill_session")
+    def manage_skill_session(
+        action: str,
+        session_id: str = "",
+        user_id: str = "",
+        skill_id: str = "",
+        gate_level: int = 1,
+        note: str = "",
+        project_id: str = "",
+        client_type: str = "genie-code",
+        context_user_id: str = "",
+        context_client_type: str = "",
+        context_model: str = "",
+    ) -> dict[str, object] | list[dict[str, object]]:
+        """Session and parking-lot management for active skills.
+
+        action:
+        - "get_active"       — return the currently active worker
+        - "park"             — park skill_id (with optional note)
+        - "resume"           — resume a parked skill_id
+        - "list_parking"     — list parked workers for this session
+        - "set_context"      — store context_user_id/context_client_type/context_model on the session
+        - "get_context"      — return stored session context
+        """
+        _sid = _default_session_id(session_id)
+        _uid = _default_user_id(user_id, _sid=_sid)
+        svc = _service().repository
+
+        if action == "get_active":
+            result = svc.get_active_skill(_sid, user_id=_uid)
+            if not result:
+                raise ValueError("No active skill for this session")
+            return result
+
+        if action == "park":
+            payload = ParkSkillRequest(
+                session_id=_sid,
+                user_id=_uid,
+                project_id=project_id,
+                client_type=client_type,  # type: ignore[arg-type]
+                gate_level=gate_level,
+                note=note,
+            )
+            return svc.park_skill(skill_id, payload)
+
+        if action == "resume":
+            payload = ResumeSkillRequest(session_id=_sid, user_id=_uid)
+            resumed = svc.resume_skill(skill_id, payload)
+            if not resumed:
+                raise ValueError(f"No parked skill found for {skill_id}")
+            return resumed
+
+        if action == "list_parking":
+            return svc.list_parking_lot(_sid, user_id=_uid)  # type: ignore[return-value]
+
+        if action == "set_context":
+            existing = _session_contexts.get(_sid, {})
+            if context_user_id:
+                existing["user_id"] = context_user_id
+            if context_client_type:
+                existing["client_type"] = context_client_type
+            if context_model:
+                existing["model"] = context_model
+            _session_contexts[_sid] = existing
+            return {"status": "context-set", "session_id": _sid, **existing}
+
+        if action == "get_context":
+            stored = _session_contexts.get(_sid, {})
+            return {"session_id": _sid, **stored}
+
+        raise ValueError(f"Unknown action: {action!r}. Valid: get_active, park, resume, list_parking, set_context, get_context")
+
+    # ── 5 ──────────────────────────────────────────────────────────────────
     @mcp.tool(name="create_skill")
     def create_skill(
         skill_id: str,
@@ -225,13 +277,10 @@ def _register_tools(mcp: FastMCP) -> FastMCP:
         standards: str = "",
         handoffs: str = "",
     ) -> dict[str, object]:
-        """Register a new skill in the runtime registry.
+        """Register or update a skill in the runtime registry.
 
-        Use this tool to create skills that the router can discover. The skill
-        is immediately available for routing, activation, and context loading.
-        The skill_id must be lowercase kebab-case (e.g. 'flowershop-owner').
-
-        When the route response action is 'auto-build', call this tool to
+        skill_id must be lowercase kebab-case (e.g. 'flowershop-owner').
+        When route_skill_request returns action='auto-build', call this to
         create the missing skill, then activate it and answer the request.
         """
         payload = CreateSkillRequest(
@@ -247,25 +296,92 @@ def _register_tools(mcp: FastMCP) -> FastMCP:
         )
         return _service().repository.upsert_skill(payload)
 
-    @mcp.tool(name="plan_project_skills")
-    def plan_project_skills(prompt: str) -> dict[str, object]:
-        """Plan the full set of stakeholder skills needed for a project.
+    # ── 6 ──────────────────────────────────────────────────────────────────
+    @mcp.tool(name="record_skill_outcome")
+    def record_skill_outcome(
+        type: str,
+        session_id: str = "",
+        user_id: str = "",
+        project_id: str = "",
+        skill_id: str = "",
+        # event fields
+        event_type: str = "",
+        summary: str = "",
+        activation_id: str = "",
+        status: str = "info",
+        payload_json: str = "{}",
+        # alignment fields
+        prompt: str = "",
+        response_excerpt: str = "",
+        gate_level: int | None = None,
+        note: str = "",
+        # feedback fields
+        rating: str = "",
+        work_item_id: str = "",
+        client_type: str = "genie-code",
+    ) -> dict[str, object]:
+        """Record a skill event, alignment score, or feedback — all in one tool.
 
-        Given a project description, returns skills grouped by phase
-        (discovery → requirements → design → build → review). Each suggestion
-        includes a domain-prefixed skill_id, role, phase, and purpose.
-
-        The response tells you which skills already exist and which to create.
-        Follow the next_step directive: create discovery-phase skills first
-        using create_skill, then activate the domain-owner to start gathering
-        requirements. Create later-phase skills as the project progresses.
+        type:
+        - "event"      — write a handoff, retry, or execution note
+          (requires: event_type, summary; optional: status, payload_json)
+        - "alignment"  — score whether the response follows the worker contract
+          (requires: prompt, response_excerpt)
+        - "feedback"   — capture end-user thumbs-up / thumbs-down
+          (requires: skill_id, rating, prompt)
         """
-        return _service().repository.plan_project_skills(prompt)
+        _sid = _default_session_id(session_id)
+        _uid = _default_user_id(user_id, _sid=_sid)
 
-    # ------------------------------------------------------------------
-    # Knowledge memory tools
-    # ------------------------------------------------------------------
+        if type == "event":
+            try:
+                payload_data = json.loads(payload_json or "{}")
+            except json.JSONDecodeError as error:
+                raise ValueError("payload_json must be valid JSON") from error
+            evt = SkillEventRequest(
+                session_id=_sid,
+                user_id=_uid,
+                project_id=project_id,
+                activation_id=activation_id,
+                skill_id=skill_id,
+                event_type=event_type,
+                status=status,
+                summary=summary,
+                payload=payload_data,
+            )
+            return _service().repository.record_skill_event(evt)
 
+        if type == "alignment":
+            aln = AlignmentRequest(
+                session_id=_sid,
+                user_id=_uid,
+                project_id=project_id,
+                skill_id=skill_id,
+                prompt=prompt,
+                response_excerpt=response_excerpt,
+                gate_level=gate_level,
+                note=note,
+            )
+            return _service().repository.score_response_alignment(aln)
+
+        if type == "feedback":
+            fb = FeedbackRequest(
+                session_id=_sid,
+                user_id=_uid,
+                project_id=project_id,
+                client_type=client_type,  # type: ignore[arg-type]
+                skill_id=skill_id,
+                rating=rating,  # type: ignore[arg-type]
+                prompt=prompt,
+                response_excerpt=response_excerpt,
+                note=note,
+                work_item_id=work_item_id,
+            )
+            return _service().repository.record_feedback(fb)
+
+        raise ValueError(f"Unknown type: {type!r}. Valid: event, alignment, feedback")
+
+    # ── 7 ──────────────────────────────────────────────────────────────────
     @mcp.tool(name="store_memory")
     def store_memory(
         scope: str,
@@ -289,26 +405,10 @@ def _register_tools(mcp: FastMCP) -> FastMCP:
     ) -> dict[str, object]:
         """Store a memory at enterprise, user, or project scope.
 
-        Scopes:
-        - "enterprise": visible to ALL users across ALL projects. Use for
-          company-wide conventions, global decisions, org-level lessons learned.
-        - "user": private to this user, persists across sessions and projects.
-          Use for personal preferences, learned patterns, working notes.
-        - "project": visible to all users who share the project. Use for
-          requirements, design decisions, phase outcomes, stakeholder notes.
-
-        Categories: requirement, decision, assumption, constraint, question,
-        handoff, preference, lesson, convention, note.
-        Tags: comma-separated for search (e.g. "ux,mobile,accessibility").
-        Status: open, provisional, confirmed, superseded, rejected.
-        Importance: 1-5, or 0 to auto-derive from category.
-        Confidence: 0.0-1.0, or 0 to auto-derive from status.
-        Source: user, worker, system, inferred, imported.
-        Owner: end-user, worker, shared, system.
-        decision_scope: business, design, technical, delivery, policy, or other.
-        Pinned memories rank higher during recall and browsing.
-        supersedes_memory_id marks an older memory as replaced.
-        project_id is required when scope is "project".
+        scope: "enterprise" (all users) | "user" (private) | "project" (shared on project).
+        category: requirement, decision, assumption, constraint, question,
+          handoff, preference, lesson, convention, note.
+        project_id required when scope="project".
         """
         payload = StoreMemoryRequest(
             scope=scope,  # type: ignore[arg-type]
@@ -335,48 +435,40 @@ def _register_tools(mcp: FastMCP) -> FastMCP:
             session_id=_sid,
         )
 
-    @mcp.tool(name="recall_memories")
-    def recall_memories(
-        query: str,
+    # ── 8 ──────────────────────────────────────────────────────────────────
+    @mcp.tool(name="query_memories")
+    def query_memories(
+        query: str = "",
         scope: str = "",
         project_id: str = "",
         category: str = "",
-        limit: int = 10,
-        user_id: str = "",
-    ) -> list[dict[str, object]]:
-        """Search memories by text relevance across accessible scopes.
-
-        Finds memories where the query matches subject, content, or tags.
-        Results are ranked by text match, importance, confidence, status,
-        pinning, recency, and prior access. Without a scope filter, searches
-        enterprise + user + accessible project memories.
-
-        Use this to recall requirements, decisions, preferences, or any
-        previously stored knowledge before starting work.
-        """
-        return _service().repository.recall_memories(
-            query=query,
-            scope=scope,
-            user_id=_default_user_id(user_id),
-            project_id=project_id,
-            category=category,
-            limit=limit,
-        )
-
-    @mcp.tool(name="list_memories")
-    def list_memories(
-        scope: str = "",
-        project_id: str = "",
-        category: str = "",
+        triggers_only: bool = False,
         limit: int = 20,
         user_id: str = "",
     ) -> list[dict[str, object]]:
-        """List memories by scope, project, or category.
+        """Search or browse memories. Also retrieves memory/guardrail triggers.
 
-        Unlike recall_memories, this does not require a search query.
-        Use it to browse what memories exist for a project, user, or enterprise.
-        Results are sorted by pinning, importance, freshness, and prior access.
+        - query="" with triggers_only=False → list memories (browse mode)
+        - query="something" → ranked text search across subject/content/tags
+        - triggers_only=True → return guardrail and recall triggers (category/client_type filter via category param)
+
+        Replaces: recall_memories, list_memories, list_memory_triggers.
         """
+        if triggers_only:
+            return _service().repository.list_memory_triggers(
+                category=category,
+                client_type="any",
+                limit=limit,
+            )
+        if query:
+            return _service().repository.recall_memories(
+                query=query,
+                scope=scope,
+                user_id=_default_user_id(user_id),
+                project_id=project_id,
+                category=category,
+                limit=limit,
+            )
         return _service().repository.list_memories(
             scope=scope,
             user_id=_default_user_id(user_id),
@@ -385,20 +477,7 @@ def _register_tools(mcp: FastMCP) -> FastMCP:
             limit=limit,
         )
 
-    @mcp.tool(name="list_memory_triggers")
-    def list_memory_triggers(category: str = "", client_type: str = "", limit: int = 20) -> list[dict[str, object]]:
-        """List the runtime's memory and guardrail triggers.
-
-        These triggers describe when the agent should recall memory, store
-        memory, supersede outdated memory, or warn about guarded writes.
-        """
-        resolved_client_type = client_type or "any"
-        return _service().repository.list_memory_triggers(
-            category=category,
-            client_type=resolved_client_type,
-            limit=limit,
-        )
-
+    # ── 9 ──────────────────────────────────────────────────────────────────
     @mcp.tool(name="update_memory")
     def update_memory(
         memory_id: str,
@@ -415,13 +494,17 @@ def _register_tools(mcp: FastMCP) -> FastMCP:
         pinned: bool | None = None,
         supersedes_memory_id: str = "",
         expires_at: str = "",
+        archive: bool = False,
         user_id: str = "",
     ) -> dict[str, object]:
-        """Update an existing memory and its ranking metadata.
+        """Update or archive an existing memory.
 
-        Only the author of the memory can update it.
         Pass only the fields you want to change.
+        Set archive=True to soft-delete (excluded from recall; auditable).
+        Only the author can update or archive a memory.
         """
+        if archive:
+            return _service().repository.archive_memory(memory_id, user_id=_default_user_id(user_id))
         payload = UpdateMemoryRequest(
             subject=subject or None,
             content=content or None,
@@ -437,395 +520,19 @@ def _register_tools(mcp: FastMCP) -> FastMCP:
             supersedes_memory_id=supersedes_memory_id or None,
             expires_at=expires_at or None,
         )
-        return _service().repository.update_memory(
-            memory_id,
-            payload,
-            user_id=_default_user_id(user_id),
-        )
+        return _service().repository.update_memory(memory_id, payload, user_id=_default_user_id(user_id))
 
-    @mcp.tool(name="archive_memory")
-    def archive_memory(
-        memory_id: str,
-        user_id: str = "",
-    ) -> dict[str, object]:
-        """Soft-delete a memory. Only the author can archive it.
-
-        Archived memories are excluded from recall and list results
-        but remain in storage for audit purposes.
-        """
-        return _service().repository.archive_memory(
-            memory_id,
-            user_id=_default_user_id(user_id),
-        )
-
-    @mcp.tool(name="activate_skill")
-    def activate_skill(
-        skill_id: str,
-        gate_level: int = 1,
-        prompt: str = "",
-        activation_reason: str = "",
-        session_id: str = "",
-        user_id: str = "",
-        project_id: str = "",
-        client_type: str = "genie-code",
-    ) -> dict[str, object]:
-        """Set the active worker contract for the current user session.
-
-        After activation, answer within the worker's identity, scope, and rules.
-        Call score_response_alignment after producing a substantial response.
-        """
-        _sid = _default_session_id(session_id)
-        payload = ActivateSkillRequest(
-            session_id=_sid,
-            user_id=_default_user_id(user_id, _sid=_sid),
-            project_id=project_id,
-            client_type=client_type,  # type: ignore[arg-type]
-            gate_level=gate_level,
-            prompt=prompt,
-            activation_reason=activation_reason,
-        )
-        return _service().repository.activate_skill(skill_id, payload)
-
-    @mcp.tool(name="get_active_skill")
-    def get_active_skill(session_id: str = "", user_id: str = "") -> dict[str, object]:
-        """Return the currently active worker for this user session."""
-        _sid = _default_session_id(session_id)
-        active_skill = _service().repository.get_active_skill(
-            _sid,
-            user_id=_default_user_id(user_id, _sid=_sid),
-        )
-        if not active_skill:
-            raise ValueError("No active skill for this session")
-        return active_skill
-
-    @mcp.tool(name="list_parking_lot")
-    def list_parking_lot(session_id: str = "", user_id: str = "") -> list[dict[str, object]]:
-        """List parked workers that can be resumed for this session."""
-        _sid = _default_session_id(session_id)
-        return _service().repository.list_parking_lot(
-            _sid,
-            user_id=_default_user_id(user_id, _sid=_sid),
-        )
-
-    @mcp.tool(name="park_skill")
-    def park_skill(
-        skill_id: str,
-        gate_level: int = 1,
-        note: str = "",
-        session_id: str = "",
-        user_id: str = "",
-        project_id: str = "",
-        client_type: str = "genie-code",
-    ) -> dict[str, object]:
-        """Park a worker so it can be resumed without rediscovery."""
-        _sid = _default_session_id(session_id)
-        payload = ParkSkillRequest(
-            session_id=_sid,
-            user_id=_default_user_id(user_id, _sid=_sid),
-            project_id=project_id,
-            client_type=client_type,  # type: ignore[arg-type]
-            gate_level=gate_level,
-            note=note,
-        )
-        return _service().repository.park_skill(skill_id, payload)
-
-    @mcp.tool(name="resume_skill")
-    def resume_skill(skill_id: str, session_id: str = "", user_id: str = "") -> dict[str, object]:
-        """Resume a parked worker for this user session."""
-        _sid = _default_session_id(session_id)
-        payload = ResumeSkillRequest(
-            session_id=_sid,
-            user_id=_default_user_id(user_id, _sid=_sid),
-        )
-        resumed = _service().repository.resume_skill(skill_id, payload)
-        if not resumed:
-            raise ValueError(f"No parked skill found for {skill_id}")
-        return resumed
-
-    @mcp.tool(name="record_skill_event")
-    def record_skill_event(
-        event_type: str,
-        summary: str,
-        session_id: str = "",
-        user_id: str = "",
-        project_id: str = "",
-        skill_id: str = "",
-        activation_id: str = "",
-        status: str = "info",
-        payload_json: str = "{}",
-    ) -> dict[str, object]:
-        """Write a visible skill event such as a handoff, retry, or execution note."""
-        try:
-            payload_data = json.loads(payload_json or "{}")
-        except json.JSONDecodeError as error:
-            raise ValueError("payload_json must be valid JSON") from error
-        _sid = _default_session_id(session_id)
-        payload = SkillEventRequest(
-            session_id=_sid,
-            user_id=_default_user_id(user_id, _sid=_sid),
-            project_id=project_id,
-            activation_id=activation_id,
-            skill_id=skill_id,
-            event_type=event_type,
-            status=status,
-            summary=summary,
-            payload=payload_data,
-        )
-        return _service().repository.record_skill_event(payload)
-
-    @mcp.tool(name="score_response_alignment")
-    def score_response_alignment(
-        prompt: str,
-        response_excerpt: str,
-        session_id: str = "",
-        user_id: str = "",
-        project_id: str = "",
-        skill_id: str = "",
-        gate_level: int | None = None,
-        note: str = "",
-    ) -> dict[str, object]:
-        """Score whether the response follows the active worker contract.
-
-        Call this after every substantial response. The score and detail are
-        returned inline so the user can see alignment quality.
-        """
-        _sid = _default_session_id(session_id)
-        payload = AlignmentRequest(
-            session_id=_sid,
-            user_id=_default_user_id(user_id, _sid=_sid),
-            project_id=project_id,
-            skill_id=skill_id,
-            prompt=prompt,
-            response_excerpt=response_excerpt,
-            gate_level=gate_level,
-            note=note,
-        )
-        return _service().repository.score_response_alignment(payload)
-
-    @mcp.tool(name="record_skill_feedback")
-    def record_skill_feedback(
-        skill_id: str,
-        rating: str,
-        prompt: str,
-        response_excerpt: str = "",
-        note: str = "",
-        work_item_id: str = "",
-        session_id: str = "",
-        user_id: str = "",
-        project_id: str = "",
-        client_type: str = "genie-code",
-    ) -> dict[str, object]:
-        """Record end-user feedback tied to a skill attempt."""
-        _sid = _default_session_id(session_id)
-        payload = FeedbackRequest(
-            session_id=_sid,
-            user_id=_default_user_id(user_id, _sid=_sid),
-            project_id=project_id,
-            client_type=client_type,  # type: ignore[arg-type]
-            skill_id=skill_id,
-            rating=rating,  # type: ignore[arg-type]
-            prompt=prompt,
-            response_excerpt=response_excerpt,
-            note=note,
-            work_item_id=work_item_id,
-        )
-        return _service().repository.record_feedback(payload)
-
-    @mcp.tool(name="list_projects")
-    def list_projects(user_id: str = "", include_shared: bool = True) -> list[dict[str, object]]:
-        """List the visible company and personal projects for a user."""
-        return _service().repository.list_projects(_default_user_id(user_id), include_shared=include_shared)
-
-    @mcp.tool(name="create_project")
-    def create_project(
-        user_id: str,
-        name: str,
-        summary: str = "",
-        owner_name: str = "",
-        visibility: str = "private",
-        stage: str = "active",
-    ) -> dict[str, object]:
-        """Create a private or shared project board lane."""
-        payload = CreateProjectRequest(
-            user_id=_default_user_id(user_id),
-            name=name,
-            summary=summary,
-            owner_name=owner_name,
-            visibility=visibility,  # type: ignore[arg-type]
-            stage=stage,
-        )
-        return _service().repository.create_project(payload)
-
-    @mcp.tool(name="list_work_items")
-    def list_work_items(project_id: str = "", user_id: str = "") -> list[dict[str, object]]:
-        """List work items for the visible projects or one project."""
-        return _service().repository.list_work_items(project_id or None, user_id=_default_user_id(user_id))
-
-    @mcp.tool(name="create_work_item")
-    def create_work_item(
-        project_id: str,
-        title: str,
-        summary: str = "",
-        stage: str = "backlog",
-        owner_skill_id: str = "",
-        owner_display_name: str = "Unassigned",
-        priority: str = "medium",
-        user_id: str = "",
-    ) -> dict[str, object]:
-        """Create a tracked work item on a project board."""
-        payload = CreateWorkItemRequest(
-            project_id=project_id,
-            user_id=_default_user_id(user_id),
-            title=title,
-            summary=summary,
-            stage=stage,  # type: ignore[arg-type]
-            owner_skill_id=owner_skill_id,
-            owner_display_name=owner_display_name,
-            priority=priority,
-        )
-        return _service().repository.create_work_item(payload)
-
-    @mcp.tool(name="update_work_item")
-    def update_work_item(
-        work_item_id: str,
-        title: str | None = None,
-        summary: str | None = None,
-        stage: str | None = None,
-        owner_skill_id: str | None = None,
-        owner_display_name: str | None = None,
-        priority: str | None = None,
-    ) -> dict[str, object]:
-        """Update stage, ownership, or text for an existing work item."""
-        payload = UpdateWorkItemRequest(
-            title=title,
-            summary=summary,
-            stage=stage,  # type: ignore[arg-type]
-            owner_skill_id=owner_skill_id,
-            owner_display_name=owner_display_name,
-            priority=priority,
-        )
-        updated = _service().repository.update_work_item(work_item_id, payload)
-        if not updated:
-            raise ValueError(f"Unknown work item: {work_item_id}")
-        return updated
-
-    # ------------------------------------------------------------------
-    # Sprint management
-    # ------------------------------------------------------------------
-
-    @mcp.tool(name="create_sprint")
-    def create_sprint(
-        project_id: str,
-        name: str,
-        status: str = "planning",
-        user_id: str = "",
-    ) -> dict[str, object]:
-        """Create a sprint to organize work items into time-boxed iterations.
-
-        Use sprints to plan and track multi-step work. Assign work items to
-        a sprint using add_to_sprint. Status can be 'planning', 'active',
-        or 'completed'.
-        """
-        payload = CreateSprintRequest(
-            project_id=project_id,
-            name=name,
-            status=status,  # type: ignore[arg-type]
-        )
-        return _service().repository.create_sprint(payload, user_id=_default_user_id(user_id))
-
-    @mcp.tool(name="list_sprints")
-    def list_sprints(project_id: str = "", user_id: str = "") -> list[dict[str, object]]:
-        """List sprints for a project, most recent first."""
-        return _service().repository.list_sprints(project_id=project_id, user_id=_default_user_id(user_id))
-
-    @mcp.tool(name="update_sprint_status")
-    def update_sprint_status(sprint_id: str, status: str) -> dict[str, object]:
-        """Update a sprint's status (planning → active → completed)."""
-        return _service().repository.update_sprint_status(sprint_id, status)
-
-    @mcp.tool(name="add_to_sprint")
-    def add_to_sprint(sprint_id: str, work_item_id: str) -> dict[str, object]:
-        """Assign a work item to a sprint for tracking."""
-        return _service().repository.add_to_sprint(sprint_id, work_item_id)
-
-    @mcp.tool(name="remove_from_sprint")
-    def remove_from_sprint(sprint_id: str, work_item_id: str) -> dict[str, object]:
-        """Remove a work item from a sprint."""
-        return _service().repository.remove_from_sprint(sprint_id, work_item_id)
-
-    # ------------------------------------------------------------------
-    # Comments
-    # ------------------------------------------------------------------
-
-    @mcp.tool(name="add_comment")
-    def add_comment(
-        entity_type: str,
-        entity_id: str,
-        body: str,
-        skill_id: str = "",
-        user_id: str = "",
-    ) -> dict[str, object]:
-        """Add a comment to a work item, project, or sprint.
-
-        entity_type: 'work_item', 'project', or 'sprint'.
-        entity_id: the ID of the entity to comment on.
-        Use this to record progress notes, blockers, decisions, or any
-        context that should be visible on the board for the end user.
-        """
-        payload = AddCommentRequest(
-            entity_type=entity_type,
-            entity_id=entity_id,
-            body=body,
-        )
-        return _service().repository.add_comment(
-            payload,
-            user_id=_default_user_id(user_id),
-            skill_id=skill_id,
-        )
-
-    @mcp.tool(name="list_comments")
-    def list_comments(entity_type: str, entity_id: str) -> list[dict[str, object]]:
-        """List comments on a work item, project, or sprint (oldest first)."""
-        return _service().repository.list_comments(entity_type, entity_id)
-
-    # ------------------------------------------------------------------
-    # Task transitions (read-only history)
-    # ------------------------------------------------------------------
-
-    @mcp.tool(name="list_transitions")
-    def list_transitions(work_item_id: str) -> list[dict[str, object]]:
-        """Show the stage-change history for a work item.
-
-        Returns each transition with from_stage, to_stage, and timestamp.
-        Useful for the end user to see how a task has progressed.
-        """
-        return _service().repository.list_transitions(work_item_id)
-
-    @mcp.tool(name="list_sessions")
-    def list_sessions(user_id: str = "", project_id: str = "", limit: int = 40) -> list[dict[str, object]]:
-        """List the end user's connected sessions.
-
-        Project-linked sessions are retained longer. Workspace-only sessions
-        are retained for 30 days.
-        """
-        resolved_user_id = _default_user_id(user_id)
-        return _service().repository.list_user_sessions(user_id=resolved_user_id, project_id=project_id, limit=limit)
-
-    @mcp.tool(name="get_session_history")
-    def get_session_history(session_id: str, user_id: str = "", limit: int = 60) -> dict[str, object]:
-        """Return a unified timeline for one user session."""
-        resolved_user_id = _default_user_id(user_id, _sid=session_id)
-        history = _service().repository.get_session_history(session_id, user_id=resolved_user_id, limit=limit)
-        if not history:
-            raise ValueError("Session history not found")
-        return history
-
+    # ── 10 ─────────────────────────────────────────────────────────────────
     @mcp.tool(name="get_dashboard")
     def get_dashboard(session_id: str = "", user_id: str = "", include_shared: bool = True) -> dict[str, Any]:
-        """Return the visible project board, active worker, recent events, and latest alignment."""
+        """Return the full runtime view: projects, board, active skill, events, alignment, session story.
+
+        Also covers runtime health — check the 'health' key for storage / config status.
+        """
         resolved_session_id = _default_session_id(session_id)
         resolved_user_id = _default_user_id(user_id, _sid=resolved_session_id)
         return {
+            "health": _service().health(),
             "user_id": resolved_user_id,
             "projects": _service().repository.list_projects(resolved_user_id, include_shared=include_shared),
             "user_sessions": _service().repository.list_user_sessions(user_id=resolved_user_id),
@@ -837,6 +544,154 @@ def _register_tools(mcp: FastMCP) -> FastMCP:
             "session_story": _service().repository.build_session_story(resolved_session_id, resolved_user_id),
         }
 
+    # ── 11 ─────────────────────────────────────────────────────────────────
+    @mcp.tool(name="manage_project")
+    def manage_project(
+        action: str,
+        user_id: str = "",
+        include_shared: bool = True,
+        name: str = "",
+        summary: str = "",
+        owner_name: str = "",
+        visibility: str = "private",
+        stage: str = "active",
+    ) -> dict[str, object] | list[dict[str, object]]:
+        """Create or list projects.
+
+        action:
+        - "list"    — list visible projects for the user
+        - "create"  — create a new project (requires: name)
+        """
+        _uid = _default_user_id(user_id)
+        if action == "list":
+            return _service().repository.list_projects(_uid, include_shared=include_shared)  # type: ignore[return-value]
+        if action == "create":
+            payload = CreateProjectRequest(
+                user_id=_uid,
+                name=name,
+                summary=summary,
+                owner_name=owner_name,
+                visibility=visibility,  # type: ignore[arg-type]
+                stage=stage,
+            )
+            return _service().repository.create_project(payload)
+        raise ValueError(f"Unknown action: {action!r}. Valid: list, create")
+
+    # ── 12 ─────────────────────────────────────────────────────────────────
+    @mcp.tool(name="manage_work_item")
+    def manage_work_item(
+        action: str,
+        project_id: str = "",
+        user_id: str = "",
+        work_item_id: str = "",
+        title: str = "",
+        summary: str = "",
+        stage: str = "backlog",
+        owner_skill_id: str = "",
+        owner_display_name: str = "Unassigned",
+        priority: str = "medium",
+        # comment fields
+        entity_type: str = "work_item",
+        body: str = "",
+        skill_id: str = "",
+    ) -> dict[str, object] | list[dict[str, object]]:
+        """Create, update, list work items; add or list comments; view stage history.
+
+        action:
+        - "list"          — list work items (filter by project_id or user_id)
+        - "create"        — create a work item (requires: project_id, title)
+        - "update"        — update a work item (requires: work_item_id)
+        - "transitions"   — show stage-change history (requires: work_item_id)
+        - "add_comment"   — add a comment (requires: entity_type, work_item_id, body)
+        - "list_comments" — list comments (requires: entity_type, work_item_id)
+        """
+        _uid = _default_user_id(user_id)
+        svc = _service().repository
+
+        if action == "list":
+            return svc.list_work_items(project_id or None, user_id=_uid)  # type: ignore[return-value]
+
+        if action == "create":
+            payload = CreateWorkItemRequest(
+                project_id=project_id,
+                user_id=_uid,
+                title=title,
+                summary=summary,
+                stage=stage,  # type: ignore[arg-type]
+                owner_skill_id=owner_skill_id,
+                owner_display_name=owner_display_name,
+                priority=priority,
+            )
+            return svc.create_work_item(payload)
+
+        if action == "update":
+            upd = UpdateWorkItemRequest(
+                title=title or None,
+                summary=summary or None,
+                stage=stage or None,  # type: ignore[arg-type]
+                owner_skill_id=owner_skill_id or None,
+                owner_display_name=owner_display_name or None,
+                priority=priority or None,
+            )
+            result = svc.update_work_item(work_item_id, upd)
+            if not result:
+                raise ValueError(f"Unknown work item: {work_item_id}")
+            return result
+
+        if action == "transitions":
+            return svc.list_transitions(work_item_id)  # type: ignore[return-value]
+
+        if action == "add_comment":
+            comment_payload = AddCommentRequest(entity_type=entity_type, entity_id=work_item_id, body=body)
+            return svc.add_comment(comment_payload, user_id=_uid, skill_id=skill_id)
+
+        if action == "list_comments":
+            return svc.list_comments(entity_type, work_item_id)  # type: ignore[return-value]
+
+        raise ValueError(f"Unknown action: {action!r}. Valid: list, create, update, transitions, add_comment, list_comments")
+
+    # ── 13 ─────────────────────────────────────────────────────────────────
+    @mcp.tool(name="manage_sprint")
+    def manage_sprint(
+        action: str,
+        project_id: str = "",
+        user_id: str = "",
+        sprint_id: str = "",
+        work_item_id: str = "",
+        name: str = "",
+        status: str = "planning",
+    ) -> dict[str, object] | list[dict[str, object]]:
+        """Create, list, update, and manage sprint membership.
+
+        action:
+        - "list"          — list sprints (filter by project_id)
+        - "create"        — create a sprint (requires: project_id, name)
+        - "update_status" — update a sprint's status (requires: sprint_id, status)
+        - "add_item"      — add a work item to a sprint (requires: sprint_id, work_item_id)
+        - "remove_item"   — remove a work item from a sprint (requires: sprint_id, work_item_id)
+        """
+        _uid = _default_user_id(user_id)
+        svc = _service().repository
+
+        if action == "list":
+            return svc.list_sprints(project_id=project_id, user_id=_uid)  # type: ignore[return-value]
+
+        if action == "create":
+            payload = CreateSprintRequest(project_id=project_id, name=name, status=status)  # type: ignore[arg-type]
+            return svc.create_sprint(payload, user_id=_uid)
+
+        if action == "update_status":
+            return svc.update_sprint_status(sprint_id, status)
+
+        if action == "add_item":
+            return svc.add_to_sprint(sprint_id, work_item_id)
+
+        if action == "remove_item":
+            return svc.remove_from_sprint(sprint_id, work_item_id)
+
+        raise ValueError(f"Unknown action: {action!r}. Valid: list, create, update_status, add_item, remove_item")
+
+    # ── Resources ──────────────────────────────────────────────────────────
     @mcp.resource("skill://registry", mime_type="application/json", name="skill-registry")
     def skill_registry_resource() -> str:
         return json.dumps(_service().repository.list_skills(), indent=2)
@@ -847,11 +702,11 @@ def _register_tools(mcp: FastMCP) -> FastMCP:
             "required_flow": [
                 "route_skill_request → returns action directive",
                 "follow action: activate → load_skill_context + activate_skill",
-                "follow action: auto-build → activate build_skill_id, create skill, activate it",
+                "follow action: auto-build → activate build_skill_id, create_skill, activate it",
                 "follow action: trivial-bypass → answer directly",
                 "answer within the active worker contract",
-                "record_skill_event for handoffs or retries",
-                "score_response_alignment after substantial responses",
+                "record_skill_outcome(type='event') for handoffs or retries",
+                "record_skill_outcome(type='alignment') after substantial responses",
             ],
             "directive_fields": {
                 "action": "activate | auto-build | trivial-bypass",
