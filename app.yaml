@@ -8,3 +8,9 @@ env:
     value: "true"
   - name: SKILL_RUNTIME_DATA_DIR
     value: "/tmp/skill-runtime-data"
+  - name: DATABRICKS_HOST
+    value: "https://dbc-e26a2f07-7a87.cloud.databricks.com"
+  - name: DATABRICKS_APP_URL
+    value: "https://orchestrator-7474657980342662.aws.databricksapps.com"
+  - name: SKILL_RUNTIME_ALLOWED_ORIGINS
+    value: "https://dbc-e26a2f07-7a87.cloud.databricks.com,https://orchestrator-7474657980342662.aws.databricksapps.com"
