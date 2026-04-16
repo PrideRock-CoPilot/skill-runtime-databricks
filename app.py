@@ -15,14 +15,23 @@ _DIST_DIR = _WEB_DIR / "dist"
 
 
 def _build_web() -> None:
-    """Build the React frontend if dist/ is absent (e.g. first run on Databricks)."""
+    """Build the React frontend if dist/ is absent.
+
+    Databricks runtimes may not have Node/npm available by default; do not fail
+    the process if the build cannot run. API + MCP should still start.
+    """
     if _DIST_DIR.exists():
         return
     print("[app] dist/ not found — building frontend...", flush=True)
     npm = "npm.cmd" if sys.platform == "win32" else "npm"
-    subprocess.run([npm, "install"], cwd=_WEB_DIR, check=True)
-    subprocess.run([npm, "run", "build"], cwd=_WEB_DIR, check=True)
-    print("[app] frontend build complete.", flush=True)
+    try:
+        subprocess.run([npm, "install"], cwd=_WEB_DIR, check=True)
+        subprocess.run([npm, "run", "build"], cwd=_WEB_DIR, check=True)
+        print("[app] frontend build complete.", flush=True)
+    except FileNotFoundError:
+        print("[app] npm is not available; continuing without web UI build.", flush=True)
+    except subprocess.CalledProcessError as exc:
+        print(f"[app] frontend build failed ({exc}); continuing with API/MCP only.", flush=True)
 
 
 def main() -> None:

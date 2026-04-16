@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from threading import Lock
 from pathlib import Path
 
@@ -13,7 +14,20 @@ class ParquetStore:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self._lock = Lock()
-        self.settings.data_dir.mkdir(parents=True, exist_ok=True)
+        self._ensure_writable_data_dir()
+
+    def _ensure_writable_data_dir(self) -> None:
+        configured_dir = self.settings.data_dir
+        try:
+            configured_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            fallback_dir = Path(os.getenv("SKILL_RUNTIME_FALLBACK_DATA_DIR", "/tmp/skill-runtime-data"))
+            fallback_dir.mkdir(parents=True, exist_ok=True)
+            object.__setattr__(self.settings, "data_dir", fallback_dir)
+            print(
+                f"[storage] data dir '{configured_dir}' unavailable ({exc}); using '{fallback_dir}'",
+                flush=True,
+            )
 
     def _resolve_table_ref(self, table_ref: str) -> tuple[str, str]:
         if "." in table_ref:
