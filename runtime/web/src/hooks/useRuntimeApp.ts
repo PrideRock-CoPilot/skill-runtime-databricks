@@ -1,8 +1,9 @@
-import { startTransition, useDeferredValue, useEffect, useMemo, useState } from "react";
+import { startTransition, useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 
-import { getSkill, getSkills } from "../api";
+import { getAuthContext, getSkill, getSkills } from "../api";
 import { STAGES } from "../constants";
 import { createRuntimeActions } from "./runtimeActions";
+import { useDashboardStream } from "./useDashboardStream";
 import {
   loadSessionHistoryData,
   refreshDashboardData,
@@ -12,6 +13,7 @@ import {
 import type {
   ActiveSkillRecord,
   AlignmentRecord,
+  AuthContext,
   ClientType,
   Complexity,
   DashboardResponse,
@@ -52,6 +54,7 @@ export interface RuntimeAppModel {
   status: string;
   busy: boolean;
   isDashboardLoading: boolean;
+  isDashboardStreaming: boolean;
   isSkillsLoading: boolean;
   isDetailLoading: boolean;
   lastRefreshedAt: string;
@@ -79,6 +82,7 @@ export interface RuntimeAppModel {
   isTemplateLibraryLoading: boolean;
   isSessionHistoryLoading: boolean;
   isKnowledgeLoading: boolean;
+  authContext: AuthContext | null;
   setSkillQuery: (value: string) => void;
   setSelectedSkillId: (value: string) => void;
   setSelectedGate: (value: number) => void;
@@ -141,6 +145,7 @@ export function useRuntimeApp(userId: string, clientType: ClientType): RuntimeAp
   const [status, setStatus] = useState("Ready");
   const [busy, setBusy] = useState(false);
   const [isDashboardLoading, setIsDashboardLoading] = useState(true);
+  const [isDashboardStreaming, setIsDashboardStreaming] = useState(false);
   const [isSkillsLoading, setIsSkillsLoading] = useState(true);
   const [isDetailLoading, setIsDetailLoading] = useState(false);
   const [isTemplateLibraryLoading, setIsTemplateLibraryLoading] = useState(false);
@@ -152,6 +157,7 @@ export function useRuntimeApp(userId: string, clientType: ClientType): RuntimeAp
   const [selectedHistorySessionId, setSelectedHistorySessionId] = useState("");
   const [sessionHistory, setSessionHistory] = useState<SessionHistoryResponse | null>(null);
   const [isKnowledgeLoading, setIsKnowledgeLoading] = useState(false);
+  const [authContext, setAuthContext] = useState<AuthContext | null>(null);
 
   const activeProject =
     dashboard?.projects.find((project) => project.user_id === userId && project.visibility === "private") ??
@@ -178,18 +184,50 @@ export function useRuntimeApp(userId: string, clientType: ClientType): RuntimeAp
   const statusTone = getStatusTone(status, busy);
   const inFlightWorkCount = workItems.filter((item) => item.stage === "build" || item.stage === "review").length;
 
+  const handleDashboardEvent = useCallback((nextDashboard: DashboardResponse) => {
+    setDashboard(nextDashboard);
+    setLastRefreshedAt(new Date().toISOString());
+    setIsDashboardLoading(false);
+  }, []);
+
+  const handleStreamError = useCallback((message: string) => {
+    setStatus(message);
+  }, []);
+
+  const handleStreamConnection = useCallback((connected: boolean) => {
+    setIsDashboardStreaming(connected);
+  }, []);
+
+  useDashboardStream({
+    sessionId,
+    userId,
+    onDashboard: handleDashboardEvent,
+    onError: handleStreamError,
+    onConnectionChange: handleStreamConnection
+  });
+
   useEffect(() => {
     void refreshDashboard().catch((error: Error) => setStatus(error.message));
   }, [userId]);
 
-  // Auto-refresh dashboard every 5 seconds for live data
   useEffect(() => {
-    const refreshInterval = setInterval(() => {
-      void refreshDashboard().catch((error: Error) => setStatus(error.message));
-    }, 5000);
-
-    return () => clearInterval(refreshInterval);
-  }, []);
+    let cancelled = false;
+    void (async () => {
+      try {
+        const identity = await getAuthContext();
+        if (!cancelled) {
+          setAuthContext(identity);
+        }
+      } catch {
+        if (!cancelled) {
+          setAuthContext(null);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
 
   useEffect(() => {
     if (!activeProject?.project_id) {
@@ -434,6 +472,7 @@ export function useRuntimeApp(userId: string, clientType: ClientType): RuntimeAp
     status,
     busy,
     isDashboardLoading,
+    isDashboardStreaming,
     isSkillsLoading,
     isDetailLoading,
     lastRefreshedAt,
@@ -461,6 +500,7 @@ export function useRuntimeApp(userId: string, clientType: ClientType): RuntimeAp
     isTemplateLibraryLoading,
     isSessionHistoryLoading,
     isKnowledgeLoading,
+    authContext,
     setSkillQuery,
     setSelectedSkillId,
     setSelectedGate,

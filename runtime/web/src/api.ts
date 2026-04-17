@@ -1,4 +1,5 @@
 import type {
+  AuthContext,
   ClientType,
   Complexity,
   DashboardResponse,
@@ -160,6 +161,18 @@ export function getDashboard(sessionId: string, userId: string): Promise<Dashboa
     user_id: userId
   });
   return request<DashboardResponse>(`/api/dashboard?${query.toString()}`);
+}
+
+export function getDashboardStreamUrl(sessionId: string, userId: string): string {
+  const query = new URLSearchParams({
+    session_id: sessionId,
+    user_id: userId
+  });
+  return `${API_BASE_URL}/api/dashboard/stream?${query.toString()}`;
+}
+
+export function getAuthContext(): Promise<AuthContext> {
+  return request<AuthContext>("/api/auth/context");
 }
 
 export function getSessionHistory(sessionId: string, userId: string, limit = 60): Promise<SessionHistoryResponse> {

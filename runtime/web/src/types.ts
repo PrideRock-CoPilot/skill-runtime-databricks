@@ -17,6 +17,15 @@ export interface UserPreferences {
   downvotedSkillIds: string[];
 }
 
+export interface AuthContext {
+  authenticated: boolean;
+  provider: string;
+  email: string;
+  display_name: string;
+  subject: string;
+  workspace_host: string;
+}
+
 export interface SkillSummary {
   skill_id: string;
   slug: string;

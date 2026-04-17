@@ -7,6 +7,9 @@ interface AppHeaderProps {
   operatorName: string;
   userId: string;
   clientType: ClientType;
+  authProvider: string;
+  authenticated: boolean;
+  workspaceHost: string;
   isSkillsLoading: boolean;
   skillsCount: number;
   inFlightWorkCount: number;
@@ -22,6 +25,7 @@ interface AppHeaderProps {
   status: string;
   statusTone: "ready" | "working" | "error";
   isDashboardLoading: boolean;
+  isDashboardStreaming: boolean;
   lastRefreshedAt: string;
   onCompile: () => Promise<void>;
 }
@@ -38,6 +42,9 @@ export function AppHeader({
   operatorName,
   userId,
   clientType,
+  authProvider,
+  authenticated,
+  workspaceHost,
   isSkillsLoading,
   skillsCount,
   inFlightWorkCount,
@@ -53,6 +60,7 @@ export function AppHeader({
   status,
   statusTone,
   isDashboardLoading,
+  isDashboardStreaming,
   lastRefreshedAt,
   onCompile
 }: AppHeaderProps) {
@@ -107,6 +115,8 @@ export function AppHeader({
             <span className="hero-badge"><span className={`status-led ${ledClass}`} />{operatorName}</span>
             <span className="hero-badge">{userId}</span>
             <span className="hero-badge">{clientType}</span>
+            <span className="hero-badge">{authenticated ? `Auth: ${authProvider}` : "Auth: local"}</span>
+            {workspaceHost ? <span className="hero-badge">{workspaceHost.replace("https://", "")}</span> : null}
           </div>
         </div>
         <div className="hero-panel">
@@ -156,7 +166,7 @@ export function AppHeader({
           <strong className="status-text"><span className={`status-led ${ledClass}`} />{status}</strong>
         </div>
         <div className="status-meta">
-          <span className="pill">{busy ? "Working" : isDashboardLoading ? "Refreshing" : "Idle"}</span>
+          <span className="pill">{busy ? "Working" : isDashboardLoading ? "Loading" : isDashboardStreaming ? "Live stream" : "Stream offline"}</span>
           <span className="pill">{formatTime(lastRefreshedAt)}</span>
         </div>
       </section>

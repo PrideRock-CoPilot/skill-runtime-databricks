@@ -23,9 +23,12 @@ export default function App() {
     <div className={`app-shell mode-${preferences.workspaceMode} ${preferences.compactBoard ? "compact-board" : ""}`}>
       <AppHeader
         sessionId={runtime.sessionId}
-        operatorName={preferences.operatorName}
-        userId={preferences.userId}
+        operatorName={runtime.authContext?.display_name ?? preferences.operatorName}
+        userId={runtime.authContext?.email ?? preferences.userId}
         clientType={preferences.clientType}
+        authProvider={runtime.authContext?.provider ?? "local"}
+        authenticated={runtime.authContext?.authenticated ?? false}
+        workspaceHost={runtime.authContext?.workspace_host ?? ""}
         isSkillsLoading={runtime.isSkillsLoading}
         skillsCount={runtime.skills.length}
         inFlightWorkCount={runtime.inFlightWorkCount}
@@ -41,6 +44,7 @@ export default function App() {
         status={runtime.status}
         statusTone={runtime.statusTone}
         isDashboardLoading={runtime.isDashboardLoading}
+        isDashboardStreaming={runtime.isDashboardStreaming}
         lastRefreshedAt={runtime.lastRefreshedAt}
         onCompile={runtime.handleCompile}
       />
