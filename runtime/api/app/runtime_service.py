@@ -7,7 +7,7 @@ from threading import Lock
 from .compiler import SkillCompiler
 from .config import Settings, get_settings
 from .repository import RuntimeRepository
-from .storage import ParquetStore
+from .storage import ParquetStore, build_store
 
 
 @dataclass
@@ -32,6 +32,8 @@ class RuntimeService:
             "skill_source_dir": str(self.settings.skill_source_dir),
             "identity_source_dir": str(self.settings.identity_source_dir),
             "data_dir": str(self.settings.data_dir),
+            "storage_backend": self.settings.storage_backend,
+            "database_url": self.settings.database_url if self.settings.storage_backend in {"sql", "database", "db"} else "",
             "databricks_host": self.settings.databricks_host,
             "databricks_app_url": self.settings.databricks_app_url,
             "mcp_http_path": "/mcp",
@@ -52,7 +54,7 @@ def get_runtime_service() -> RuntimeService:
     with _runtime_lock:
         if _runtime_service is None:
             settings = get_settings()
-            store = ParquetStore(settings)
+            store = build_store(settings)
             compiler = SkillCompiler(settings, store)
             repository = RuntimeRepository(settings, store)
             service = RuntimeService(

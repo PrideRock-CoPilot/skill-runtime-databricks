@@ -9,17 +9,17 @@ if str(REPO_ROOT) not in sys.path:
 
 from runtime.api.app.compiler import SkillCompiler
 from runtime.api.app.config import get_settings
-from runtime.api.app.storage import ParquetStore
+from runtime.api.app.storage import build_store
 
 
 def main() -> None:
     settings = get_settings()
-    store = ParquetStore(settings)
+    store = build_store(settings)
     compiler = SkillCompiler(settings, store)
     results = compiler.compile()
     print(
         f"Compiled {results['skills']} skills into {results['bundles']} gated bundles at "
-        f"{settings.data_dir}"
+        f"{settings.data_dir} using {settings.storage_backend} storage"
     )
 
 

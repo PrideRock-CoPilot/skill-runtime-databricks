@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 from threading import Lock
 from pathlib import Path
 
@@ -84,3 +85,63 @@ class ParquetStore:
 
     def read_bytes(self, group_name: str, relative_path: str | Path) -> bytes:
         return self.binary_path(group_name, relative_path).read_bytes()
+
+
+class SqlTableStore(ParquetStore):
+    def __init__(self, settings: Settings) -> None:
+        super().__init__(settings)
+        self._db_path = self._resolve_sqlite_path(settings.database_url)
+        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _resolve_sqlite_path(self, database_url: str) -> Path:
+        normalized = database_url.strip()
+        if normalized.startswith("sqlite:///"):
+            target = normalized[len("sqlite:///") :]
+        elif normalized.startswith("sqlite://"):
+            target = normalized[len("sqlite://") :]
+        else:
+            target = normalized
+
+        if not target:
+            return self.settings.data_dir / "skill_runtime.db"
+
+        path = Path(target)
+        if not path.is_absolute():
+            path = self.settings.repo_root / path
+        return path
+
+    def _connect(self) -> sqlite3.Connection:
+        return sqlite3.connect(self._db_path)
+
+    def _table_name(self, table_ref: str) -> str:
+        group_name, table_name = self._resolve_table_ref(table_ref)
+        return f"{group_name}__{table_name}"
+
+    def exists(self, table_ref: str) -> bool:
+        table_name = self._table_name(table_ref)
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+                (table_name,),
+            )
+            return cursor.fetchone() is not None
+
+    def read_table(self, table_ref: str) -> pd.DataFrame:
+        table_name = self._table_name(table_ref)
+        if not self.exists(table_ref):
+            return pd.DataFrame()
+        with self._connect() as connection:
+            return pd.read_sql_query(f'SELECT * FROM "{table_name}"', connection)
+
+    def write_table(self, table_ref: str, dataframe: pd.DataFrame) -> None:
+        table_name = self._table_name(table_ref)
+        with self._lock:
+            with self._connect() as connection:
+                dataframe.to_sql(table_name, connection, index=False, if_exists="replace")
+
+
+def build_store(settings: Settings) -> ParquetStore:
+    backend = settings.storage_backend.strip().lower()
+    if backend in {"sql", "database", "db"}:
+        return SqlTableStore(settings)
+    return ParquetStore(settings)

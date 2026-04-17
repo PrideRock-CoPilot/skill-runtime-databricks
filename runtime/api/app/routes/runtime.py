@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import hashlib
 import json
+from dataclasses import dataclass, field
 
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
@@ -13,6 +15,25 @@ from ..dependencies import repository, runtime_service
 from ..models import DashboardResponse
 
 router = APIRouter()
+
+_STREAM_POLL_SECONDS = 2.0
+_STREAM_HEARTBEAT_SECONDS = 20.0
+
+
+@dataclass
+class _DashboardStreamState:
+    subscribers: set[asyncio.Queue[str]] = field(default_factory=set)
+    worker_task: asyncio.Task[None] | None = None
+    last_hash: str = ""
+    last_emit_at: float = 0.0
+
+
+_stream_lock = asyncio.Lock()
+_stream_states: dict[tuple[str, str, bool], _DashboardStreamState] = {}
+
+
+def _resolved_user_id(user_id: str) -> str:
+    return user_id or runtime_service().settings.default_user_id
 
 
 def _base64url_decode(segment: str) -> bytes:
@@ -35,7 +56,7 @@ def _decode_jwt_claims(token: str) -> dict[str, object]:
 
 
 def _dashboard_snapshot(session_id: str, user_id: str, include_shared: bool = True) -> dict[str, object]:
-    resolved_user_id = user_id or runtime_service().settings.default_user_id
+    resolved_user_id = _resolved_user_id(user_id)
     response = DashboardResponse(
         user_id=resolved_user_id,
         projects=repository().list_projects(user_id=resolved_user_id, include_shared=include_shared),
@@ -48,6 +69,80 @@ def _dashboard_snapshot(session_id: str, user_id: str, include_shared: bool = Tr
         session_story=repository().build_session_story(session_id, resolved_user_id),
     )
     return response.model_dump()
+
+
+async def _broadcast_to_subscribers(key: tuple[str, str, bool], event: str) -> None:
+    async with _stream_lock:
+        state = _stream_states.get(key)
+        if not state:
+            return
+        subscribers = list(state.subscribers)
+
+    for queue in subscribers:
+        if queue.full():
+            try:
+                queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+        try:
+            queue.put_nowait(event)
+        except asyncio.QueueFull:
+            continue
+
+
+async def _run_dashboard_worker(key: tuple[str, str, bool]) -> None:
+    session_id, user_id, include_shared = key
+    while True:
+        async with _stream_lock:
+            state = _stream_states.get(key)
+            if not state or not state.subscribers:
+                _stream_states.pop(key, None)
+                return
+            last_hash = state.last_hash
+            last_emit_at = state.last_emit_at
+
+        payload = _dashboard_snapshot(session_id=session_id, user_id=user_id, include_shared=include_shared)
+        message = json.dumps(payload, separators=(",", ":"))
+        digest = hashlib.sha1(message.encode("utf-8")).hexdigest()
+        now = asyncio.get_running_loop().time()
+
+        event: str | None = None
+        if digest != last_hash:
+            event = f"event: dashboard\\ndata: {message}\\n\\n"
+        elif now - last_emit_at >= _STREAM_HEARTBEAT_SECONDS:
+            event = "event: heartbeat\\ndata: {}\\n\\n"
+
+        if event is not None:
+            await _broadcast_to_subscribers(key, event)
+            async with _stream_lock:
+                state = _stream_states.get(key)
+                if state:
+                    if digest != state.last_hash:
+                        state.last_hash = digest
+                    state.last_emit_at = now
+
+        await asyncio.sleep(_STREAM_POLL_SECONDS)
+
+
+async def _subscribe_dashboard_stream(key: tuple[str, str, bool]) -> asyncio.Queue[str]:
+    queue: asyncio.Queue[str] = asyncio.Queue(maxsize=4)
+    async with _stream_lock:
+        state = _stream_states.get(key)
+        if state is None:
+            state = _DashboardStreamState()
+            _stream_states[key] = state
+        state.subscribers.add(queue)
+        if state.worker_task is None or state.worker_task.done():
+            state.worker_task = asyncio.create_task(_run_dashboard_worker(key))
+    return queue
+
+
+async def _unsubscribe_dashboard_stream(key: tuple[str, str, bool], queue: asyncio.Queue[str]) -> None:
+    async with _stream_lock:
+        state = _stream_states.get(key)
+        if not state:
+            return
+        state.subscribers.discard(queue)
 
 
 @router.get("/api/health")
@@ -76,12 +171,16 @@ async def dashboard_stream(
     user_id: str = "",
     include_shared: bool = True,
 ) -> StreamingResponse:
+    stream_key = (session_id, _resolved_user_id(user_id), include_shared)
+    queue = await _subscribe_dashboard_stream(stream_key)
+
     async def event_generator():
-        while True:
-            payload = _dashboard_snapshot(session_id=session_id, user_id=user_id, include_shared=include_shared)
-            message = json.dumps(payload)
-            yield f"event: dashboard\ndata: {message}\n\n"
-            await asyncio.sleep(2)
+        try:
+            while True:
+                event = await queue.get()
+                yield event
+        finally:
+            await _unsubscribe_dashboard_stream(stream_key, queue)
 
     return StreamingResponse(
         event_generator(),

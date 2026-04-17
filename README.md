@@ -32,6 +32,30 @@ python app.py
 
 Open `http://localhost:8000`.
 
+## Storage Backend Switch
+
+The runtime can use file-backed parquet tables or SQL-backed tables with a config change.
+
+- `SKILL_RUNTIME_STORAGE_BACKEND=parquet` (default)
+- `SKILL_RUNTIME_STORAGE_BACKEND=sql`
+- `SKILL_RUNTIME_DATABASE_URL=sqlite:///./.runtime/data/skill_runtime.db` (sqlite URL or file path)
+
+Example:
+
+```powershell
+$env:SKILL_RUNTIME_STORAGE_BACKEND = "sql"
+$env:SKILL_RUNTIME_DATABASE_URL = "sqlite:///./.runtime/data/skill_runtime.db"
+python app.py
+```
+
+Deploy or initialize runtime tables:
+
+```powershell
+python scripts/deploy_storage_tables.py --backend sql --database-url "sqlite:///./.runtime/data/skill_runtime.db"
+```
+
+Use `--skip-compile` if you only want to initialize tables without recompiling skills.
+
 ## Deploy to Databricks App
 
 Sync source:
