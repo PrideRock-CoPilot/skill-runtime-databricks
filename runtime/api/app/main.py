@@ -18,6 +18,7 @@ from .models import (
     CreateWorkItemRequest,
     DashboardResponse,
     FeedbackRequest,
+    MemoryRecord,
     ParkSkillRequest,
     ResumeSkillRequest,
     RouteRequest,
@@ -25,6 +26,8 @@ from .models import (
     SessionRecord,
     SkillDetailResponse,
     SkillEventRequest,
+    StoreMemoryRequest,
+    UpdateMemoryRequest,
     UpdateWorkItemRequest,
 )
 from .repository import RuntimeRepository
@@ -45,21 +48,21 @@ class SinglePageApp(StaticFiles):
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
-    service = get_runtime_service()
-    app.state.runtime_service = service
-    app.state.settings = service.settings
-    app.state.compiler = service.compiler
-    app.state.repository = service.repository
+async def lifespan(fastapi_app: FastAPI):
+    current_runtime_service = get_runtime_service()
+    fastapi_app.state.runtime_service = current_runtime_service
+    fastapi_app.state.settings = current_runtime_service.settings
+    fastapi_app.state.compiler = current_runtime_service.compiler
+    fastapi_app.state.repository = current_runtime_service.repository
     async with _mcp_server.session_manager.run():
         yield
 
 
 app = FastAPI(title="Skill Runtime API", version="0.2.0", lifespan=lifespan, redirect_slashes=False)
-service = get_runtime_service()
+runtime_service_instance = get_runtime_service()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=list(service.settings.allowed_web_origins),
+    allow_origins=list(runtime_service_instance.settings.allowed_web_origins),
     allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
     allow_credentials=True,
     allow_methods=["*"],
@@ -247,6 +250,63 @@ def list_memory_triggers(category: str = "", client_type: str = "", limit: int =
     return repository().list_memory_triggers(category=category, client_type=client_type, limit=limit)
 
 
+@app.get("/api/memories", response_model=list[MemoryRecord])
+def list_memories(
+    query: str = "",
+    scope: str = "",
+    user_id: str = "",
+    project_id: str = "",
+    category: str = "",
+    limit: int = 20,
+) -> list[dict[str, object]]:
+    normalized_scope = "" if scope == "all" else scope
+    normalized_category = "" if category == "all" else category
+    if query.strip():
+        return repository().recall_memories(
+            query=query,
+            scope=normalized_scope,
+            user_id=user_id,
+            project_id=project_id,
+            category=normalized_category,
+            limit=limit,
+        )
+    return repository().list_memories(
+        scope=normalized_scope,
+        user_id=user_id,
+        project_id=project_id,
+        category=normalized_category,
+        limit=limit,
+    )
+
+
+@app.post("/api/memories")
+def create_memory(payload: StoreMemoryRequest, user_id: str = "", session_id: str = "") -> dict[str, object]:
+    try:
+        return repository().store_memory(payload, user_id=user_id, session_id=session_id)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.patch("/api/memories/{memory_id}")
+def update_memory(memory_id: str, payload: UpdateMemoryRequest, user_id: str = "") -> dict[str, object]:
+    try:
+        return repository().update_memory(memory_id, payload, user_id=user_id)
+    except ValueError as error:
+        message = str(error)
+        status_code = 404 if "not found" in message.lower() else 403
+        raise HTTPException(status_code=status_code, detail=message) from error
+
+
+@app.delete("/api/memories/{memory_id}")
+def archive_memory(memory_id: str, user_id: str = "") -> dict[str, object]:
+    try:
+        return repository().archive_memory(memory_id, user_id=user_id)
+    except ValueError as error:
+        message = str(error)
+        status_code = 404 if "not found" in message.lower() else 403
+        raise HTTPException(status_code=status_code, detail=message) from error
+
+
 @app.get("/api/sessions", response_model=list[SessionRecord])
 def list_sessions(user_id: str = "", project_id: str = "", limit: int = 40) -> list[dict[str, object]]:
     return repository().list_user_sessions(user_id=user_id, project_id=project_id, limit=limit)
@@ -334,6 +394,6 @@ def dashboard(
     )
 
 
-web_dist_dir = service.settings.repo_root / "runtime" / "web" / "dist"
+web_dist_dir = runtime_service_instance.settings.repo_root / "runtime" / "web" / "dist"
 if web_dist_dir.exists():
     app.mount("/", SinglePageApp(directory=str(web_dist_dir), html=True), name="runtime-web")

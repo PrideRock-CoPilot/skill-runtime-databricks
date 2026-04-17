@@ -19,6 +19,7 @@ export const QUICK_PROMPTS = [
 export const APP_TABS: Array<{ id: AppTab; label: string; detail: string }> = [
   { id: "board", label: "Board", detail: "Run delivery" },
   { id: "skills", label: "Skills", detail: "Roster and packets" },
+  { id: "knowledge", label: "Knowledge", detail: "Memory base" },
   { id: "sessions", label: "Sessions", detail: "Connected activity" },
   { id: "preferences", label: "Preferences", detail: "Operator setup" }
 ];

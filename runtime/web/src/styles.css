@@ -487,6 +487,135 @@ textarea { min-height: 80px; resize: vertical; line-height: 1.5; }
   gap: 1rem;
 }
 
+.knowledge-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.knowledge-intro-panel {
+  background: linear-gradient(135deg, #f3f8ff 0%, #fbfdff 100%);
+  border: 1px solid #d8e6fa;
+}
+
+.knowledge-intro-copy {
+  padding: 1.5rem;
+}
+
+.knowledge-intro-copy h2 {
+  font-size: 1.375rem;
+  font-weight: 700;
+  margin: 0.25rem 0 0.75rem;
+  color: var(--text);
+}
+
+.knowledge-intro-copy p {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.knowledge-grid {
+  display: grid;
+  grid-template-columns: minmax(320px, 380px) 1fr;
+  gap: 1rem;
+  align-items: start;
+}
+
+.knowledge-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.knowledge-filter-row,
+.knowledge-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.knowledge-filter-row {
+  grid-template-columns: minmax(0, 1.6fr) repeat(2, minmax(120px, 0.8fr));
+}
+
+.knowledge-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.knowledge-form .toggle-row {
+  justify-content: flex-start;
+}
+
+.knowledge-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.knowledge-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.9rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.knowledge-card.pinned {
+  border-color: var(--border-strong);
+  box-shadow: inset 3px 0 0 var(--primary);
+}
+
+.knowledge-card-header,
+.knowledge-card-footer,
+.knowledge-badges,
+.knowledge-tags {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.knowledge-card-header {
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.knowledge-card-header h3 {
+  font-size: 0.95rem;
+  color: var(--text);
+}
+
+.knowledge-card-header p {
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-top: 0.15rem;
+}
+
+.knowledge-content {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+}
+
+.knowledge-card-footer {
+  justify-content: space-between;
+}
+
+.knowledge-card-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.knowledge-note {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
 .sessions-intro-panel {
   background: linear-gradient(135deg, #f0f6ff 0%, #f8fbff 100%);
   border: 1px solid #d4e4f7;
@@ -545,6 +674,9 @@ textarea { min-height: 80px; resize: vertical; line-height: 1.5; }
 
 @media (max-width: 900px) {
   .new-work-form { grid-template-columns: 1fr; }
+  .knowledge-grid { grid-template-columns: 1fr; }
+  .knowledge-filter-row,
+  .knowledge-form-grid { grid-template-columns: 1fr; }
 }
 
 /* ── Board grid (stage columns) ── */

@@ -3,6 +3,7 @@ import { AppTabs } from "./components/AppTabs";
 import { useRuntimeApp } from "./hooks/useRuntimeApp";
 import { useUserPreferences } from "./hooks/useUserPreferences";
 import { BoardWorkspace } from "./views/BoardWorkspace";
+import { KnowledgeWorkspace } from "./views/KnowledgeWorkspace";
 import { PreferencesWorkspace } from "./views/PreferencesWorkspace";
 import { SessionsWorkspace } from "./views/SessionsWorkspace";
 import { SkillsWorkspace } from "./views/SkillsWorkspace";
@@ -59,6 +60,7 @@ export default function App() {
             onFeedback={handleFeedback}
           />
         ) : null}
+        {activeTab === "knowledge" ? <KnowledgeWorkspace runtime={runtime} /> : null}
         {activeTab === "sessions" ? <SessionsWorkspace runtime={runtime} /> : null}
         {activeTab === "preferences" ? (
           <PreferencesWorkspace runtime={runtime} preferences={preferences} onPreferenceChange={updatePreference} />

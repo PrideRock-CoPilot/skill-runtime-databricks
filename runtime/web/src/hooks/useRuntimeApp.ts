@@ -2,7 +2,9 @@ import { startTransition, useDeferredValue, useEffect, useMemo, useState } from 
 
 import {
   activateSkill,
+  archiveMemory,
   compileRuntime,
+  createMemory,
   createTemplateDocument,
   createWorkItem,
   getDashboard,
@@ -11,6 +13,7 @@ import {
   getTemplateDownloadUrl,
   getSkill,
   getSkills,
+  listMemories,
   listTemplateDocuments,
   listTemplates,
   parkSkill,
@@ -19,6 +22,7 @@ import {
   routePrompt,
   scoreAlignment,
   uploadTemplate,
+  updateMemory,
   updateWorkItem
 } from "../api";
 import { STAGES } from "../constants";
@@ -29,6 +33,8 @@ import type {
   Complexity,
   DashboardResponse,
   GeneratedDocumentRecord,
+  MemoryRecord,
+  MemoryScope,
   ParkedSkillRecord,
   RouteResponse,
   SessionHistoryResponse,
@@ -78,6 +84,10 @@ export interface RuntimeAppModel {
   parkingLot: ParkedSkillRecord[];
   templateLibrary: TemplateRecord[];
   generatedDocuments: GeneratedDocumentRecord[];
+  knowledgeEntries: MemoryRecord[];
+  knowledgeQuery: string;
+  knowledgeScope: MemoryScope | "all";
+  knowledgeCategory: string;
   groupedWorkItems: Array<{ stage: WorkItemStage; items: WorkItemRecord[] }>;
   completedWorkCount: number;
   completionRate: number;
@@ -85,6 +95,7 @@ export interface RuntimeAppModel {
   inFlightWorkCount: number;
   isTemplateLibraryLoading: boolean;
   isSessionHistoryLoading: boolean;
+  isKnowledgeLoading: boolean;
   setSkillQuery: (value: string) => void;
   setSelectedSkillId: (value: string) => void;
   setSelectedGate: (value: number) => void;
@@ -94,6 +105,9 @@ export interface RuntimeAppModel {
   setNewWorkTitle: (value: string) => void;
   setNewWorkSummary: (value: string) => void;
   setNewWorkStage: (value: WorkItemStage) => void;
+  setKnowledgeQuery: (value: string) => void;
+  setKnowledgeScope: (value: MemoryScope | "all") => void;
+  setKnowledgeCategory: (value: string) => void;
   handleCompile: () => Promise<void>;
   handleRoute: () => Promise<void>;
   handleActivateSelectedSkill: () => Promise<void>;
@@ -104,6 +118,18 @@ export interface RuntimeAppModel {
   handleCreateWorkItem: () => Promise<void>;
   shiftWorkItem: (item: WorkItemRecord, direction: -1 | 1) => Promise<void>;
   refreshTemplateLibrary: () => Promise<void>;
+  refreshKnowledgeBase: () => Promise<void>;
+  handleCreateKnowledgeEntry: (payload: {
+    scope: MemoryScope;
+    subject: string;
+    content: string;
+    category: string;
+    tags: string;
+    pinned: boolean;
+    projectId?: string;
+  }) => Promise<void>;
+  handleArchiveKnowledgeEntry: (memoryId: string) => Promise<void>;
+  handleToggleKnowledgePin: (entry: MemoryRecord) => Promise<void>;
   handleUploadTemplate: (file: File, name: string, category: string, description: string) => Promise<void>;
   handleCreateDocumentFromTemplate: (templateId: string, name: string, description: string) => Promise<void>;
   getTemplateDownloadHref: (templateId: string) => string;
@@ -116,6 +142,10 @@ export function useRuntimeApp(userId: string, clientType: ClientType): RuntimeAp
   const [skills, setSkills] = useState<SkillSummary[]>([]);
   const [skillQuery, setSkillQuery] = useState("");
   const deferredSkillQuery = useDeferredValue(skillQuery);
+  const [knowledgeQuery, setKnowledgeQuery] = useState("");
+  const deferredKnowledgeQuery = useDeferredValue(knowledgeQuery);
+  const [knowledgeScope, setKnowledgeScope] = useState<MemoryScope | "all">("all");
+  const [knowledgeCategory, setKnowledgeCategory] = useState("all");
   const [selectedSkillId, setSelectedSkillId] = useState("");
   const [selectedGate, setSelectedGate] = useState(1);
   const [skillDetail, setSkillDetail] = useState<SkillDetailResponse | null>(null);
@@ -135,8 +165,10 @@ export function useRuntimeApp(userId: string, clientType: ClientType): RuntimeAp
   const [lastRefreshedAt, setLastRefreshedAt] = useState("");
   const [templateLibrary, setTemplateLibrary] = useState<TemplateRecord[]>([]);
   const [generatedDocuments, setGeneratedDocuments] = useState<GeneratedDocumentRecord[]>([]);
+  const [knowledgeEntries, setKnowledgeEntries] = useState<MemoryRecord[]>([]);
   const [selectedHistorySessionId, setSelectedHistorySessionId] = useState("");
   const [sessionHistory, setSessionHistory] = useState<SessionHistoryResponse | null>(null);
+  const [isKnowledgeLoading, setIsKnowledgeLoading] = useState(false);
 
   const activeProject =
     dashboard?.projects.find((project) => project.user_id === userId && project.visibility === "private") ??
@@ -188,6 +220,38 @@ export function useRuntimeApp(userId: string, clientType: ClientType): RuntimeAp
       }
     });
   }, [userId, activeProject?.project_id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      setIsKnowledgeLoading(true);
+      try {
+        const entries = await listMemories({
+          userId,
+          projectId: activeProject?.project_id ?? "",
+          query: deferredKnowledgeQuery,
+          scope: knowledgeScope,
+          category: knowledgeCategory,
+          limit: 24
+        });
+        if (!cancelled) {
+          setKnowledgeEntries(entries);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setStatus(error instanceof Error ? error.message : "Loading knowledge base failed");
+        }
+      } finally {
+        if (!cancelled) {
+          setIsKnowledgeLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [userId, activeProject?.project_id, deferredKnowledgeQuery, knowledgeScope, knowledgeCategory]);
 
   useEffect(() => {
     if (userSessions.length === 0) {
@@ -346,6 +410,23 @@ export function useRuntimeApp(userId: string, clientType: ClientType): RuntimeAp
       throw error;
     } finally {
       setIsTemplateLibraryLoading(false);
+    }
+  }
+
+  async function refreshKnowledgeBase() {
+    setIsKnowledgeLoading(true);
+    try {
+      const entries = await listMemories({
+        userId,
+        projectId: activeProject?.project_id ?? "",
+        query: deferredKnowledgeQuery,
+        scope: knowledgeScope,
+        category: knowledgeCategory,
+        limit: 24
+      });
+      setKnowledgeEntries(entries);
+    } finally {
+      setIsKnowledgeLoading(false);
     }
   }
 
@@ -599,6 +680,63 @@ export function useRuntimeApp(userId: string, clientType: ClientType): RuntimeAp
     }
   }
 
+  async function handleCreateKnowledgeEntry(payload: {
+    scope: MemoryScope;
+    subject: string;
+    content: string;
+    category: string;
+    tags: string;
+    pinned: boolean;
+    projectId?: string;
+  }) {
+    setBusy(true);
+    try {
+      await createMemory(userId, sessionId, {
+        scope: payload.scope,
+        subject: payload.subject,
+        content: payload.content,
+        category: payload.category,
+        project_id: payload.scope === "project" ? payload.projectId ?? activeProject?.project_id ?? "" : "",
+        tags: payload.tags,
+        pinned: payload.pinned,
+        source: "user",
+        owner: "end-user"
+      });
+      await refreshKnowledgeBase();
+      setStatus(`Stored knowledge entry "${payload.subject}".`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Knowledge entry save failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleArchiveKnowledgeEntry(memoryId: string) {
+    setBusy(true);
+    try {
+      await archiveMemory(memoryId, userId);
+      await refreshKnowledgeBase();
+      setStatus("Archived knowledge entry.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Knowledge archive failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleToggleKnowledgePin(entry: MemoryRecord) {
+    setBusy(true);
+    try {
+      await updateMemory(entry.memory_id, userId, { pinned: !entry.pinned });
+      await refreshKnowledgeBase();
+      setStatus(`${entry.pinned ? "Unpinned" : "Pinned"} knowledge entry "${entry.subject}".`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Knowledge update failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function getTemplateDownloadHref(templateId: string) {
     return getTemplateDownloadUrl(templateId, userId);
   }
@@ -642,6 +780,10 @@ export function useRuntimeApp(userId: string, clientType: ClientType): RuntimeAp
     parkingLot,
     templateLibrary,
     generatedDocuments,
+    knowledgeEntries,
+    knowledgeQuery,
+    knowledgeScope,
+    knowledgeCategory,
     groupedWorkItems,
     completedWorkCount,
     completionRate,
@@ -649,6 +791,7 @@ export function useRuntimeApp(userId: string, clientType: ClientType): RuntimeAp
     inFlightWorkCount,
     isTemplateLibraryLoading,
     isSessionHistoryLoading,
+    isKnowledgeLoading,
     setSkillQuery,
     setSelectedSkillId,
     setSelectedGate,
@@ -658,6 +801,9 @@ export function useRuntimeApp(userId: string, clientType: ClientType): RuntimeAp
     setNewWorkTitle,
     setNewWorkSummary,
     setNewWorkStage,
+    setKnowledgeQuery,
+    setKnowledgeScope,
+    setKnowledgeCategory,
     handleCompile,
     handleRoute,
     handleActivateSelectedSkill,
@@ -668,6 +814,10 @@ export function useRuntimeApp(userId: string, clientType: ClientType): RuntimeAp
     handleCreateWorkItem,
     shiftWorkItem,
     refreshTemplateLibrary,
+    refreshKnowledgeBase,
+    handleCreateKnowledgeEntry,
+    handleArchiveKnowledgeEntry,
+    handleToggleKnowledgePin,
     handleUploadTemplate,
     handleCreateDocumentFromTemplate,
     getTemplateDownloadHref,

@@ -2,7 +2,8 @@ export type Complexity = "simple" | "standard" | "deep" | "expert";
 export type WorkItemStage = "backlog" | "discovery" | "design" | "build" | "review" | "done";
 export type ClientType = "genie-code" | "ide" | "web" | "api";
 export type ProjectVisibility = "private" | "shared";
-export type AppTab = "board" | "skills" | "sessions" | "preferences";
+export type MemoryScope = "enterprise" | "user" | "project";
+export type AppTab = "board" | "skills" | "knowledge" | "sessions" | "preferences";
 
 export interface UserPreferences {
   operatorName: string;
@@ -232,6 +233,34 @@ export interface GeneratedDocumentRecord {
   mime_type: string;
   size_bytes: number;
   source_template_name: string;
+  created_at: string;
+  updated_at: string;
+  archived: boolean;
+}
+
+export interface MemoryRecord {
+  memory_id: string;
+  scope: MemoryScope;
+  user_id: string;
+  project_id: string;
+  category: string;
+  subject: string;
+  content: string;
+  skill_id: string;
+  session_id: string;
+  tags: string;
+  status: string;
+  importance: number;
+  confidence: number;
+  source: string;
+  owner: string;
+  decision_scope: string;
+  pinned: boolean;
+  supersedes_memory_id: string;
+  expires_at: string;
+  last_accessed_at: string;
+  access_count: number;
+  relevance_score: number;
   created_at: string;
   updated_at: string;
   archived: boolean;

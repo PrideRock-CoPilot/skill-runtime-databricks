@@ -28,7 +28,7 @@ function readStoredPreferences(): UserPreferences {
 
 function readStoredTab(): AppTab {
   const raw = window.localStorage.getItem("skill-runtime-active-tab");
-  if (raw === "board" || raw === "skills" || raw === "preferences") {
+  if (raw === "board" || raw === "skills" || raw === "knowledge" || raw === "sessions" || raw === "preferences") {
     return raw;
   }
   return "board";

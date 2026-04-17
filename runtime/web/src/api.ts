@@ -3,6 +3,8 @@ import type {
   Complexity,
   DashboardResponse,
   GeneratedDocumentRecord,
+  MemoryRecord,
+  MemoryScope,
   RouteResponse,
   SessionHistoryResponse,
   SkillDetailResponse,
@@ -108,6 +110,50 @@ export interface CreateTemplateDocumentPayload {
   description?: string;
 }
 
+export interface CreateMemoryPayload {
+  scope: MemoryScope;
+  subject: string;
+  content: string;
+  category?: string;
+  project_id?: string;
+  skill_id?: string;
+  tags?: string;
+  status?: string;
+  importance?: number;
+  confidence?: number;
+  source?: string;
+  owner?: string;
+  decision_scope?: string;
+  pinned?: boolean;
+  supersedes_memory_id?: string;
+  expires_at?: string;
+}
+
+export interface UpdateMemoryPayload {
+  subject?: string;
+  content?: string;
+  category?: string;
+  tags?: string;
+  status?: string;
+  importance?: number;
+  confidence?: number;
+  source?: string;
+  owner?: string;
+  decision_scope?: string;
+  pinned?: boolean;
+  supersedes_memory_id?: string;
+  expires_at?: string;
+}
+
+export interface ListMemoriesParams {
+  userId: string;
+  projectId?: string;
+  query?: string;
+  scope?: MemoryScope | "all";
+  category?: string;
+  limit?: number;
+}
+
 export function getDashboard(sessionId: string, userId: string): Promise<DashboardResponse> {
   const query = new URLSearchParams({
     session_id: sessionId,
@@ -122,6 +168,49 @@ export function getSessionHistory(sessionId: string, userId: string, limit = 60)
     limit: String(limit)
   });
   return request<SessionHistoryResponse>(`/api/sessions/${sessionId}/history?${query.toString()}`);
+}
+
+export function listMemories(params: ListMemoriesParams): Promise<MemoryRecord[]> {
+  const query = new URLSearchParams({
+    user_id: params.userId,
+    limit: String(params.limit ?? 24)
+  });
+  if (params.projectId) {
+    query.set("project_id", params.projectId);
+  }
+  if (params.query) {
+    query.set("query", params.query);
+  }
+  if (params.scope && params.scope !== "all") {
+    query.set("scope", params.scope);
+  }
+  if (params.category && params.category !== "all") {
+    query.set("category", params.category);
+  }
+  return request<MemoryRecord[]>(`/api/memories?${query.toString()}`);
+}
+
+export function createMemory(userId: string, sessionId: string, payload: CreateMemoryPayload): Promise<unknown> {
+  const query = new URLSearchParams({ user_id: userId, session_id: sessionId });
+  return request(`/api/memories?${query.toString()}`, {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function updateMemory(memoryId: string, userId: string, payload: UpdateMemoryPayload): Promise<unknown> {
+  const query = new URLSearchParams({ user_id: userId });
+  return request(`/api/memories/${memoryId}?${query.toString()}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function archiveMemory(memoryId: string, userId: string): Promise<unknown> {
+  const query = new URLSearchParams({ user_id: userId });
+  return request(`/api/memories/${memoryId}?${query.toString()}`, {
+    method: "DELETE"
+  });
 }
 
 export function getSkills(query = ""): Promise<SkillSummary[]> {
