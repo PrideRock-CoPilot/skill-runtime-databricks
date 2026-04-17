@@ -66,6 +66,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(DatabricksAuthMiddleware)
+
+
+@app.middleware("http")
+async def normalize_mcp_path(request, call_next):
+    if request.scope["path"] == "/mcp":
+        request.scope["path"] = "/mcp/"
+    return await call_next(request)
+
+
 app.mount(
     "/mcp",
     _mcp_server.streamable_http_app(),
