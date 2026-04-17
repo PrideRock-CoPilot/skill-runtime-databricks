@@ -1,31 +1,14 @@
 import { startTransition, useDeferredValue, useEffect, useMemo, useState } from "react";
 
-import {
-  activateSkill,
-  archiveMemory,
-  compileRuntime,
-  createMemory,
-  createTemplateDocument,
-  createWorkItem,
-  getDashboard,
-  getSessionHistory,
-  getTemplateDocumentDownloadUrl,
-  getTemplateDownloadUrl,
-  getSkill,
-  getSkills,
-  listMemories,
-  listTemplateDocuments,
-  listTemplates,
-  parkSkill,
-  recordFeedback,
-  resumeSkill,
-  routePrompt,
-  scoreAlignment,
-  uploadTemplate,
-  updateMemory,
-  updateWorkItem
-} from "../api";
+import { getSkill, getSkills } from "../api";
 import { STAGES } from "../constants";
+import { createRuntimeActions } from "./runtimeActions";
+import {
+  loadSessionHistoryData,
+  refreshDashboardData,
+  refreshKnowledgeBaseData,
+  refreshTemplateLibraryData
+} from "./runtimeLoaders";
 import type {
   ActiveSkillRecord,
   AlignmentRecord,
@@ -224,26 +207,22 @@ export function useRuntimeApp(userId: string, clientType: ClientType): RuntimeAp
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      setIsKnowledgeLoading(true);
       try {
-        const entries = await listMemories({
+        await refreshKnowledgeBaseData({
           userId,
           projectId: activeProject?.project_id ?? "",
           query: deferredKnowledgeQuery,
           scope: knowledgeScope,
           category: knowledgeCategory,
-          limit: 24
+          setKnowledgeEntries,
+          setIsKnowledgeLoading
         });
         if (!cancelled) {
-          setKnowledgeEntries(entries);
+          return;
         }
       } catch (error) {
         if (!cancelled) {
           setStatus(error instanceof Error ? error.message : "Loading knowledge base failed");
-        }
-      } finally {
-        if (!cancelled) {
-          setIsKnowledgeLoading(false);
         }
       }
     })();
@@ -279,20 +258,20 @@ export function useRuntimeApp(userId: string, clientType: ClientType): RuntimeAp
     }
     let cancelled = false;
     void (async () => {
-      setIsSessionHistoryLoading(true);
       try {
-        const history = await getSessionHistory(selectedHistorySessionId, userId);
+        await loadSessionHistoryData({
+          sessionId: selectedHistorySessionId,
+          userId,
+          setSessionHistory,
+          setIsSessionHistoryLoading
+        });
         if (!cancelled) {
-          setSessionHistory(history);
+          return;
         }
       } catch (error) {
         if (!cancelled) {
           setSessionHistory(null);
           setStatus(error instanceof Error ? error.message : "Loading session history failed");
-        }
-      } finally {
-        if (!cancelled) {
-          setIsSessionHistoryLoading(false);
         }
       }
     })();
@@ -377,373 +356,63 @@ export function useRuntimeApp(userId: string, clientType: ClientType): RuntimeAp
   }, [selectedSkillId, selectedGate]);
 
   async function refreshDashboard() {
-    setIsDashboardLoading(true);
-    try {
-      const nextDashboard = await getDashboard(sessionId, userId);
-      setDashboard(nextDashboard);
-      setLastRefreshedAt(new Date().toISOString());
-    } finally {
-      setIsDashboardLoading(false);
-    }
+    await refreshDashboardData({ sessionId, userId, setDashboard, setLastRefreshedAt, setIsDashboardLoading });
   }
 
   async function refreshTemplateLibrary(projectId = activeProject?.project_id ?? "") {
-    if (!projectId) {
-      setTemplateLibrary([]);
-      setGeneratedDocuments([]);
-      return;
-    }
-    setIsTemplateLibraryLoading(true);
-    try {
-      const [templates, documents] = await Promise.all([
-        listTemplates(projectId, userId),
-        listTemplateDocuments(projectId, userId)
-      ]);
-      setTemplateLibrary(templates);
-      setGeneratedDocuments(documents);
-    } catch (error) {
-      if (error instanceof Error && error.message.includes("Not Found")) {
-        setTemplateLibrary([]);
-        setGeneratedDocuments([]);
-        return;
-      }
-      throw error;
-    } finally {
-      setIsTemplateLibraryLoading(false);
-    }
+    await refreshTemplateLibraryData({
+      projectId,
+      userId,
+      setTemplateLibrary,
+      setGeneratedDocuments,
+      setIsTemplateLibraryLoading
+    });
   }
 
   async function refreshKnowledgeBase() {
-    setIsKnowledgeLoading(true);
-    try {
-      const entries = await listMemories({
-        userId,
-        projectId: activeProject?.project_id ?? "",
-        query: deferredKnowledgeQuery,
-        scope: knowledgeScope,
-        category: knowledgeCategory,
-        limit: 24
-      });
-      setKnowledgeEntries(entries);
-    } finally {
-      setIsKnowledgeLoading(false);
-    }
+    await refreshKnowledgeBaseData({
+      userId,
+      projectId: activeProject?.project_id ?? "",
+      query: deferredKnowledgeQuery,
+      scope: knowledgeScope,
+      category: knowledgeCategory,
+      setKnowledgeEntries,
+      setIsKnowledgeLoading
+    });
   }
 
-  async function handleCompile() {
-    setBusy(true);
-    try {
-      const result = await compileRuntime();
-      setStatus(`Recompiled ${result.skills} skills into ${result.bundles} gated bundles.`);
-      const nextSkills = await getSkills(deferredSkillQuery);
-      setSkills(nextSkills);
-      await refreshDashboard();
-      if (selectedSkillId) {
-        setSkillDetail(await getSkill(selectedSkillId, selectedGate));
-      }
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Compile failed");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleRoute() {
-    setBusy(true);
-    try {
-      const result = await routePrompt(
-        routeText,
-        routeComplexity || undefined,
-        sessionId,
-        userId,
-        activeProject?.project_id ?? "",
-        clientType
-      );
-      setRouteResult(result);
-      if (result.matches.length > 0) {
-        startTransition(() => {
-          setSelectedSkillId(result.matches[0].skill_id);
-          setSelectedGate(result.recommended_gate);
-        });
-      }
-      await refreshDashboard();
-      setStatus(`Routed prompt at ${result.complexity} complexity.`);
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Routing failed");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleActivateSelectedSkill() {
-    if (!skillDetail) {
-      return;
-    }
-    setBusy(true);
-    try {
-      await activateSkill(skillDetail.skill.skill_id, {
-        session_id: sessionId,
-        user_id: userId,
-        project_id: activeProject?.project_id ?? "",
-        client_type: clientType,
-        gate_level: selectedGate,
-        prompt: routeText,
-        activation_reason: "Activated from the runtime dashboard."
-      });
-      await refreshDashboard();
-      setStatus(`Activated ${skillDetail.skill.display_name} at gate ${selectedGate}.`);
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Activation failed");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleScoreAlignment() {
-    if (!skillDetail) {
-      return;
-    }
-    setBusy(true);
-    try {
-      await scoreAlignment({
-        session_id: sessionId,
-        user_id: userId,
-        project_id: activeProject?.project_id ?? "",
-        skill_id: skillDetail.skill.skill_id,
-        prompt: routeText || skillDetail.skill.description,
-        response_excerpt: skillDetail.bundles[0]?.content.slice(0, 400) ?? skillDetail.skill.description,
-        gate_level: selectedGate,
-        note: "Dashboard alignment check"
-      });
-      await refreshDashboard();
-      setStatus(`Scored alignment for ${skillDetail.skill.display_name}.`);
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Alignment scoring failed");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleParkSelectedSkill() {
-    if (!skillDetail) {
-      return;
-    }
-    setBusy(true);
-    try {
-      await parkSkill(
-        skillDetail.skill.skill_id,
-        sessionId,
-        userId,
-        activeProject?.project_id ?? "",
-        clientType,
-        selectedGate,
-        routeText
-      );
-      await refreshDashboard();
-      setStatus(`Parked ${skillDetail.skill.display_name} at gate ${selectedGate}.`);
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Parking failed");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleResume(item: ParkedSkillRecord) {
-    setBusy(true);
-    try {
-      await resumeSkill(item.skill_id, sessionId, userId);
-      setSelectedSkillId(item.skill_id);
-      setSelectedGate(item.gate_level);
-      setSkillDetail(await getSkill(item.skill_id, item.gate_level));
-      await refreshDashboard();
-      setStatus(`Resumed ${item.display_name} from the parking lot.`);
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Resume failed");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleFeedback(rating: "correct" | "wrong") {
-    if (!skillDetail) {
-      return;
-    }
-    setBusy(true);
-    try {
-      await recordFeedback({
-        session_id: sessionId,
-        user_id: userId,
-        project_id: activeProject?.project_id ?? "",
-        client_type: clientType,
-        skill_id: skillDetail.skill.skill_id,
-        rating,
-        prompt: routeText || skillDetail.skill.description,
-        response_excerpt: skillDetail.bundles[0]?.content.slice(0, 300) ?? "",
-        note: `Feedback captured at gate ${selectedGate}`
-      });
-      await refreshDashboard();
-      setStatus(`Stored ${rating} feedback for ${skillDetail.skill.display_name}.`);
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Feedback failed");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleCreateWorkItem() {
-    if (!activeProject || !newWorkTitle.trim()) {
-      return;
-    }
-    setBusy(true);
-    try {
-      await createWorkItem({
-        project_id: activeProject.project_id,
-        user_id: userId,
-        title: newWorkTitle.trim(),
-        summary: newWorkSummary.trim(),
-        stage: newWorkStage,
-        owner_skill_id: selectedSkillId,
-        owner_display_name: skillDetail?.skill.display_name ?? "Unassigned",
-        priority: "medium"
-      });
-      setNewWorkTitle("");
-      setNewWorkSummary("");
-      setNewWorkStage("backlog");
-      await refreshDashboard();
-      setStatus("Created a new AI work item.");
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Create work item failed");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function shiftWorkItem(item: WorkItemRecord, direction: -1 | 1) {
-    const currentIndex = STAGES.indexOf(item.stage);
-    const nextStage = STAGES[currentIndex + direction];
-    if (!nextStage) {
-      return;
-    }
-    setBusy(true);
-    try {
-      await updateWorkItem(item.work_item_id, { stage: nextStage });
-      await refreshDashboard();
-      setStatus(`Moved "${item.title}" to ${nextStage}.`);
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Move failed");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleUploadTemplate(file: File, name: string, category: string, description: string) {
-    if (!activeProject?.project_id) {
-      setStatus("Create or select a project before uploading templates.");
-      return;
-    }
-    setBusy(true);
-    try {
-      await uploadTemplate(activeProject.project_id, {
-        userId,
-        name,
-        category,
-        description,
-        file
-      });
-      await refreshTemplateLibrary(activeProject.project_id);
-      setStatus(`Uploaded template "${name || file.name}" to ${activeProject.name}.`);
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Template upload failed");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleCreateDocumentFromTemplate(templateId: string, name: string, description: string) {
-    if (!activeProject?.project_id) {
-      setStatus("Create or select a project before generating documents.");
-      return;
-    }
-    setBusy(true);
-    try {
-      await createTemplateDocument(activeProject.project_id, templateId, {
-        user_id: userId,
-        name,
-        description
-      });
-      await refreshTemplateLibrary(activeProject.project_id);
-      setStatus(`Created "${name}" from the selected template.`);
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Document generation failed");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleCreateKnowledgeEntry(payload: {
-    scope: MemoryScope;
-    subject: string;
-    content: string;
-    category: string;
-    tags: string;
-    pinned: boolean;
-    projectId?: string;
-  }) {
-    setBusy(true);
-    try {
-      await createMemory(userId, sessionId, {
-        scope: payload.scope,
-        subject: payload.subject,
-        content: payload.content,
-        category: payload.category,
-        project_id: payload.scope === "project" ? payload.projectId ?? activeProject?.project_id ?? "" : "",
-        tags: payload.tags,
-        pinned: payload.pinned,
-        source: "user",
-        owner: "end-user"
-      });
-      await refreshKnowledgeBase();
-      setStatus(`Stored knowledge entry "${payload.subject}".`);
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Knowledge entry save failed");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleArchiveKnowledgeEntry(memoryId: string) {
-    setBusy(true);
-    try {
-      await archiveMemory(memoryId, userId);
-      await refreshKnowledgeBase();
-      setStatus("Archived knowledge entry.");
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Knowledge archive failed");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleToggleKnowledgePin(entry: MemoryRecord) {
-    setBusy(true);
-    try {
-      await updateMemory(entry.memory_id, userId, { pinned: !entry.pinned });
-      await refreshKnowledgeBase();
-      setStatus(`${entry.pinned ? "Unpinned" : "Pinned"} knowledge entry "${entry.subject}".`);
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Knowledge update failed");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function getTemplateDownloadHref(templateId: string) {
-    return getTemplateDownloadUrl(templateId, userId);
-  }
-
-  function getGeneratedDocumentDownloadHref(documentId: string) {
-    return getTemplateDocumentDownloadUrl(documentId, userId);
-  }
+  const actions = createRuntimeActions({
+    sessionId,
+    userId,
+    clientType,
+    activeProjectId: activeProject?.project_id ?? "",
+    activeProjectName: activeProject?.name ?? "",
+    selectedSkillId,
+    selectedGate,
+    skillDetail,
+    routeText,
+    routeComplexity,
+    newWorkTitle,
+    newWorkSummary,
+    newWorkStage,
+    deferredSkillQuery,
+    deferredKnowledgeQuery,
+    knowledgeScope,
+    knowledgeCategory,
+    setBusy,
+    setStatus,
+    setSkills,
+    setSkillDetail,
+    setSelectedSkillId,
+    setSelectedGate,
+    setRouteResult,
+    setNewWorkTitle,
+    setNewWorkSummary,
+    setNewWorkStage,
+    refreshDashboard,
+    refreshTemplateLibrary: () => refreshTemplateLibrary(activeProject?.project_id ?? ""),
+    refreshKnowledgeBase
+  });
 
   return {
     sessionId,
@@ -804,23 +473,23 @@ export function useRuntimeApp(userId: string, clientType: ClientType): RuntimeAp
     setKnowledgeQuery,
     setKnowledgeScope,
     setKnowledgeCategory,
-    handleCompile,
-    handleRoute,
-    handleActivateSelectedSkill,
-    handleScoreAlignment,
-    handleParkSelectedSkill,
-    handleResume,
-    handleFeedback,
-    handleCreateWorkItem,
-    shiftWorkItem,
+    handleCompile: actions.handleCompile,
+    handleRoute: actions.handleRoute,
+    handleActivateSelectedSkill: actions.handleActivateSelectedSkill,
+    handleScoreAlignment: actions.handleScoreAlignment,
+    handleParkSelectedSkill: actions.handleParkSelectedSkill,
+    handleResume: actions.handleResume,
+    handleFeedback: actions.handleFeedback,
+    handleCreateWorkItem: actions.handleCreateWorkItem,
+    shiftWorkItem: actions.shiftWorkItem,
     refreshTemplateLibrary,
     refreshKnowledgeBase,
-    handleCreateKnowledgeEntry,
-    handleArchiveKnowledgeEntry,
-    handleToggleKnowledgePin,
-    handleUploadTemplate,
-    handleCreateDocumentFromTemplate,
-    getTemplateDownloadHref,
-    getGeneratedDocumentDownloadHref
+    handleCreateKnowledgeEntry: actions.handleCreateKnowledgeEntry,
+    handleArchiveKnowledgeEntry: actions.handleArchiveKnowledgeEntry,
+    handleToggleKnowledgePin: actions.handleToggleKnowledgePin,
+    handleUploadTemplate: actions.handleUploadTemplate,
+    handleCreateDocumentFromTemplate: actions.handleCreateDocumentFromTemplate,
+    getTemplateDownloadHref: actions.getTemplateDownloadHref,
+    getGeneratedDocumentDownloadHref: actions.getGeneratedDocumentDownloadHref
   };
 }
